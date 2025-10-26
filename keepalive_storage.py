@@ -1,5 +1,6 @@
 """
 Keepalive Tasks Persistent Storage Module
+Supports both local file storage and GitHub-based cloud storage
 """
 import json
 import os
@@ -13,9 +14,35 @@ class KeepaliveStorage:
     STORAGE_FILE = "keepalive_tasks.json"
     
     @staticmethod
+    def _get_storage_backend():
+        """
+        Get the appropriate storage backend
+        
+        Returns:
+            Storage backend instance (GitHub or local file)
+        """
+        try:
+            # Try to use GitHub storage if available
+            from github_storage import GitHubStorage
+            import streamlit as st
+            
+            if hasattr(st, 'secrets') and 'github_storage' in st.secrets:
+                token = st.secrets['github_storage'].get('token', '')
+                repo = st.secrets['github_storage'].get('repo', '')
+                branch = st.secrets['github_storage'].get('branch', 'main')
+                
+                if token and repo:
+                    return GitHubStorage(token, repo, branch)
+        except Exception:
+            pass
+        
+        # Fallback to local file storage
+        return None
+    
+    @staticmethod
     def save_tasks(tasks: Dict) -> bool:
         """
-        Save keepalive tasks to file
+        Save keepalive tasks to storage (GitHub or local file)
         
         Args:
             tasks: Dictionary of keepalive tasks
@@ -23,6 +50,12 @@ class KeepaliveStorage:
         Returns:
             True if successful
         """
+        # Try GitHub storage first
+        github_storage = KeepaliveStorage._get_storage_backend()
+        if github_storage:
+            return github_storage.save_tasks(tasks)
+        
+        # Fallback to local file storage
         try:
             # Convert datetime objects to ISO format strings
             serializable_tasks = {}
@@ -45,11 +78,17 @@ class KeepaliveStorage:
     @staticmethod
     def load_tasks() -> Dict:
         """
-        Load keepalive tasks from file
+        Load keepalive tasks from storage (GitHub or local file)
         
         Returns:
             Dictionary of keepalive tasks
         """
+        # Try GitHub storage first
+        github_storage = KeepaliveStorage._get_storage_backend()
+        if github_storage:
+            return github_storage.load_tasks()
+        
+        # Fallback to local file storage
         if not os.path.exists(KeepaliveStorage.STORAGE_FILE):
             return {}
         

@@ -94,11 +94,24 @@ cp accounts.json.example accounts.json
 3. 添加以下内容：
 
 ```toml
+[login]
+username = "admin"
+password = "your_password"
+
+# GitHub 存储配置（保活任务持久化，推荐配置）
+[github_storage]
+token = "ghp_your_token"
+repo = "your-username/codespace-manager"
+branch = "main"
+
 [accounts]
 my_personal = "ghp_your_personal_token_here"
 my_work = "ghp_your_work_token_here"
 team_account = "ghp_your_team_token_here"
 ```
+
+> **重要**：配置 `github_storage` 可确保保活任务在 Streamlit Cloud 重启后不丢失。
+> 详见：[云存储配置指南](CLOUD_STORAGE_SETUP.md)
 
 #### 方式三：应用内添加（最简单）
 
@@ -227,11 +240,18 @@ streamlit run streamlit_app.py
 - 或点击 **❌** 只取消保活但不停止 Codespace
 
 **持久化特性** 🆕：
-- ✅ 保活任务自动保存到 `keepalive_tasks.json`
+- ✅ 保活任务自动保存
+  - 本地：`keepalive_tasks.json` 文件
+  - 云端：`codespace-manager/keepalive_tasks.json`（GitHub API）
 - ✅ 应用重启后自动恢复未过期的任务
-- ✅ 本地和 Cloud 都支持
+- ✅ **Streamlit Cloud 重启后数据不丢失**
+- ✅ 使用你的私有 GitHub 仓库，安全可靠
+- ✅ **多人同时使用不会冲突**（智能并发控制）
 
-📖 详细说明请查看：[保活功能指南](KEEPALIVE_GUIDE.md)
+📖 详细说明：
+- [保活功能指南](KEEPALIVE_GUIDE.md)
+- [云存储配置](CLOUD_STORAGE_SETUP.md) ⭐ Streamlit Cloud 必读
+- [并发控制 FAQ](CONCURRENCY_FAQ.md) - 多人使用说明
 
 ### 创建新 Codespace
 

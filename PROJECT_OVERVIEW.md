@@ -64,7 +64,9 @@ codespace-manager/
 ├── 核心代码
 │   ├── streamlit_app.py            # 主应用（多账户支持）
 │   ├── github_api.py               # GitHub API 封装
-│   └── config.py                   # 配置管理
+│   ├── config.py                   # 配置管理
+│   ├── keepalive_storage.py        # 保活任务持久化 🆕
+│   └── github_storage.py           # GitHub 存储后端 🆕
 │
 ├── 配置文件
 │   ├── requirements.txt            # Python 依赖
@@ -80,7 +82,14 @@ codespace-manager/
     ├── README.md                  # 完整文档
     ├── QUICKSTART.md              # 快速入门
     ├── DEPLOYMENT.md              # 部署指南
-    └── PROJECT_OVERVIEW.md        # 项目总览（本文件）
+    ├── PROJECT_OVERVIEW.md        # 项目总览（本文件）
+    ├── SECURITY.md                # 安全指南
+    ├── KEEPALIVE_GUIDE.md         # 保活功能指南 🆕
+    ├── CLOUD_STORAGE_SETUP.md     # 云存储配置 🆕
+    ├── STREAMLIT_CLOUD_DEPLOY.md  # Cloud 部署指南
+    ├── FEATURES_v1.2.md           # v1.2 特性说明
+    ├── UPGRADE_GUIDE.md           # 升级指南
+    └── CHANGELOG.md               # 更新日志
 ```
 
 ## 🔧 技术架构

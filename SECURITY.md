@@ -180,7 +180,9 @@ GitHub Token：
 - 登录凭证（Secrets）
 - GitHub 账户配置（accounts.json / Secrets）
 - GitHub Tokens（accounts.json / Secrets）
-- **保活任务（keepalive_tasks.json）** 🆕
+- **保活任务（keepalive_tasks.json / GitHub）** 🆕
+  - 本地环境：`keepalive_tasks.json` 文件
+  - Streamlit Cloud：GitHub API（配置后）
   - 自动恢复未过期的保活任务
   - 继续监控和维护
 
@@ -189,12 +191,43 @@ GitHub Token：
 - Session 缓存（Manager 实例、用户信息等）
 - 临时的 Codespace 状态
 
+### 保活任务持久化 🆕
+
+#### 存储方式
+
+| 环境 | 存储方式 | 持久化 |
+|------|---------|--------|
+| 本地开发 | `keepalive_tasks.json` 文件 | ✅ |
+| Streamlit Cloud（未配置） | 临时文件 | ❌ 重启后丢失 |
+| Streamlit Cloud（已配置 GitHub 存储） | GitHub API | ✅ 完全持久化 |
+
+#### GitHub 存储配置
+
+**推荐用于 Streamlit Cloud**：
+
+```toml
+[github_storage]
+token = "ghp_your_token"
+repo = "your-username/codespace-manager"
+branch = "main"
+```
+
+**安全说明**：
+- ✅ Token 存储在 Streamlit Secrets（加密）
+- ✅ 数据存储在你的私有仓库
+- ✅ 自动提交到仓库（可查看历史）
+- ✅ 完全免费，无限制
+- ✅ 重启后自动恢复
+
+**详细配置**：参见 [云存储配置指南](CLOUD_STORAGE_SETUP.md)
+
 ### 数据恢复
 
 如果数据丢失：
 1. 检查 `accounts.json` 文件是否存在
 2. 检查 Streamlit Secrets 是否配置正确
-3. 重新添加账户
+3. 检查 GitHub 存储是否正确配置（Cloud 环境）
+4. 重新添加账户
 
 ---
 

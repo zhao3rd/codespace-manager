@@ -1,4 +1,5 @@
 streamlit>=1.28.0
 requests>=2.31.0
+# requests is used for both GitHub Codespaces API and GitHub Storage API
 python-dotenv>=1.0.0
 
