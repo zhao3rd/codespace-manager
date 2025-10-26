@@ -35,6 +35,12 @@ def init_session_state():
         st.session_state.refresh_trigger = 0
     if "show_add_account" not in st.session_state:
         st.session_state.show_add_account = False
+    if "keepalive_tasks" not in st.session_state:
+        st.session_state.keepalive_tasks = {}
+    if "show_keepalive_dialog" not in st.session_state:
+        st.session_state.show_keepalive_dialog = {}
+    if "last_keepalive_check" not in st.session_state:
+        st.session_state.last_keepalive_check = {}
 
 
 def check_login_credentials(username: str, password: str) -> bool:
@@ -341,9 +347,51 @@ def display_sidebar():
         """)
 
 
+def check_and_maintain_keepalive(account_name: str, cs_name: str, manager: GitHubCodespacesManager):
+    """
+    Check and maintain keepalive for a codespace
+    
+    Args:
+        account_name: Account name
+        cs_name: Codespace name
+        manager: GitHubCodespacesManager instance
+    """
+    task_key = f"{account_name}_{cs_name}"
+    
+    if task_key not in st.session_state.keepalive_tasks:
+        return
+    
+    task = st.session_state.keepalive_tasks[task_key]
+    start_time = task['start_time']
+    keepalive_hours = task['keepalive_hours']
+    
+    # Calculate elapsed time
+    elapsed_hours = (datetime.now() - start_time).total_seconds() / 3600
+    
+    # Check if keepalive period has expired
+    if elapsed_hours >= keepalive_hours:
+        st.session_state.keepalive_tasks.pop(task_key, None)
+        return
+    
+    # Check codespace status
+    try:
+        cs = manager.get_codespace(cs_name)
+        state = cs.get('state', 'Unknown')
+        
+        # If not running, try to restart
+        if state in ["Stopped", "Shutdown"]:
+            try:
+                manager.start_codespace(cs_name)
+                st.session_state.last_keepalive_check[task_key] = datetime.now()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesManager):
     """
-    Display codespaces for a specific account
+    Display codespaces for a specific account in table format
     
     Args:
         account_name: Account name
@@ -364,58 +412,148 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
         
         st.caption(f"Total: {len(codespaces)} codespace(s)")
         
-        # Display as cards
+        # Check keepalive tasks
+        for cs in codespaces:
+            cs_name = cs.get("name")
+            check_and_maintain_keepalive(account_name, cs_name, manager)
+        
+        # Header row
+        header_cols = st.columns([0.3, 2, 1, 1, 1, 1.5])
+        with header_cols[0]:
+            st.markdown("**Status**")
+        with header_cols[1]:
+            st.markdown("**Codespace / Repository**")
+        with header_cols[2]:
+            st.markdown("**Machine**")
+        with header_cols[3]:
+            st.markdown("**Location**")
+        with header_cols[4]:
+            st.markdown("**Last Used**")
+        with header_cols[5]:
+            st.markdown("**Actions**")
+        
+        st.markdown("---")
+        
+        # Display each codespace as a row
         for idx, cs in enumerate(codespaces):
-            col1, col2 = st.columns([4, 1])
+            cs_name = cs.get("name")
+            state = cs.get("state", "Unknown")
+            emoji = get_status_emoji(state)
+            repo = cs.get('repository', {}).get('full_name', 'N/A')
+            branch = cs.get('git_status', {}).get('ref', 'N/A')
+            machine = cs.get('machine', {}).get('display_name', 'N/A')
+            location = cs.get('location', 'N/A')
+            last_used = format_datetime(cs.get('last_used_at'))
+            web_url = cs.get('web_url', '')
             
-            with col1:
-                state = cs.get("state", "Unknown")
-                emoji = get_status_emoji(state)
-                
-                with st.expander(f"{emoji} **{cs.get('name', 'Unknown')}** - {cs.get('repository', {}).get('full_name', 'N/A')}", expanded=False):
-                    info_col1, info_col2 = st.columns(2)
-                    
-                    with info_col1:
-                        st.markdown(f"**Status:** {state}")
-                        st.markdown(f"**Machine:** {cs.get('machine', {}).get('display_name', 'N/A')}")
-                        st.markdown(f"**Repository:** {cs.get('repository', {}).get('full_name', 'N/A')}")
-                        st.markdown(f"**Branch:** {cs.get('git_status', {}).get('ref', 'N/A')}")
-                    
-                    with info_col2:
-                        st.markdown(f"**Created:** {format_datetime(cs.get('created_at'))}")
-                        st.markdown(f"**Last Used:** {format_datetime(cs.get('last_used_at'))}")
-                        st.markdown(f"**Location:** {cs.get('location', 'N/A')}")
-                        
-                        if cs.get('web_url'):
-                            st.markdown(f"[🌐 Open in Browser]({cs.get('web_url')})")
+            # Check if keepalive is active
+            task_key = f"{account_name}_{cs_name}"
+            is_keepalive_active = task_key in st.session_state.keepalive_tasks
+            keepalive_info = ""
+            if is_keepalive_active:
+                task = st.session_state.keepalive_tasks[task_key]
+                elapsed = (datetime.now() - task['start_time']).total_seconds() / 3600
+                remaining = task['keepalive_hours'] - elapsed
+                keepalive_info = f" 🔄 ({remaining:.1f}h left)"
             
-            with col2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                cs_name = cs.get("name")
-                state = cs.get("state")
+            # Data row
+            cols = st.columns([0.3, 2, 1, 1, 1, 1.5])
+            
+            with cols[0]:
+                st.markdown(f"{emoji}")
+            
+            with cols[1]:
+                st.markdown(f"**{cs_name}**{keepalive_info}")
+                st.caption(f"📦 {repo}")
+                st.caption(f"🌿 {branch}")
+                if web_url:
+                    st.markdown(f"[🌐 Open]({web_url})")
+            
+            with cols[2]:
+                st.markdown(machine)
+            
+            with cols[3]:
+                st.markdown(location)
+            
+            with cols[4]:
+                st.markdown(last_used)
+            
+            with cols[5]:
+                # Action buttons in a row
+                action_cols = st.columns(3)
                 
-                # Action buttons
-                if state == "Available":
-                    if st.button("⏸️", key=f"stop_{account_name}_{idx}", help="Stop", use_container_width=True):
-                        with st.spinner("Stopping..."):
-                            try:
-                                manager.stop_codespace(cs_name)
-                                st.success(f"✅ Stopped")
-                                time.sleep(1)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Error: {str(e)}")
+                # Refresh button
+                with action_cols[0]:
+                    if st.button("🔄", key=f"refresh_{account_name}_{idx}", help="Refresh", use_container_width=True):
+                        st.rerun()
                 
-                elif state in ["Stopped", "Shutdown"]:
-                    if st.button("▶️", key=f"start_{account_name}_{idx}", help="Start", use_container_width=True):
-                        with st.spinner("Starting..."):
-                            try:
-                                manager.start_codespace(cs_name)
-                                st.success(f"✅ Started")
-                                time.sleep(1)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Error: {str(e)}")
+                # Start/Stop button
+                with action_cols[1]:
+                    if state == "Available":
+                        if st.button("⏸️", key=f"stop_{account_name}_{idx}", help="Stop", use_container_width=True):
+                            with st.spinner("Stopping..."):
+                                try:
+                                    manager.stop_codespace(cs_name)
+                                    # Remove keepalive task if exists
+                                    st.session_state.keepalive_tasks.pop(task_key, None)
+                                    st.success(f"✅ Stopped")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Error: {str(e)}")
+                    
+                    elif state in ["Stopped", "Shutdown"]:
+                        if st.button("▶️", key=f"start_{account_name}_{idx}", help="Start with keepalive", use_container_width=True):
+                            st.session_state.show_keepalive_dialog[task_key] = True
+                            st.rerun()
+                
+                # Keepalive toggle
+                with action_cols[2]:
+                    if is_keepalive_active:
+                        if st.button("❌", key=f"stop_keepalive_{account_name}_{idx}", help="Stop keepalive", use_container_width=True):
+                            st.session_state.keepalive_tasks.pop(task_key, None)
+                            st.success("Keepalive stopped")
+                            st.rerun()
+            
+            # Keepalive dialog
+            if st.session_state.show_keepalive_dialog.get(task_key, False):
+                with st.form(f"keepalive_form_{account_name}_{idx}"):
+                    st.markdown(f"**Set Keepalive for {cs_name}**")
+                    keepalive_hours = st.number_input(
+                        "Keepalive Duration (hours)",
+                        min_value=0.5,
+                        max_value=24.0,
+                        value=4.0,
+                        step=0.5,
+                        help="Codespace will be kept alive for this duration"
+                    )
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.form_submit_button("✅ Start", use_container_width=True):
+                            with st.spinner("Starting with keepalive..."):
+                                try:
+                                    manager.start_codespace(cs_name)
+                                    # Add keepalive task
+                                    st.session_state.keepalive_tasks[task_key] = {
+                                        'start_time': datetime.now(),
+                                        'keepalive_hours': keepalive_hours,
+                                        'account_name': account_name,
+                                        'cs_name': cs_name
+                                    }
+                                    st.session_state.show_keepalive_dialog[task_key] = False
+                                    st.success(f"✅ Started with {keepalive_hours}h keepalive")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Error: {str(e)}")
+                    
+                    with col2:
+                        if st.form_submit_button("❌ Cancel", use_container_width=True):
+                            st.session_state.show_keepalive_dialog[task_key] = False
+                            st.rerun()
+            
+            st.markdown("")  # Spacing
         
         st.markdown("---")
     
@@ -431,12 +569,48 @@ def display_all_codespaces():
         st.info("👈 Please add an account using the sidebar")
         return
     
+    # Display keepalive status summary
+    active_keepalives = len(st.session_state.keepalive_tasks)
+    if active_keepalives > 0:
+        st.info(f"🔄 {active_keepalives} active keepalive task(s). Page auto-refreshes every 60 seconds.")
+        
+        # Auto-refresh if there are active keepalive tasks
+        if active_keepalives > 0:
+            # Use a placeholder for auto-refresh countdown
+            import time as time_module
+            refresh_placeholder = st.empty()
+            
+            # Show countdown and refresh after 60 seconds
+            st.markdown("---")
+    
     st.header("📋 All Codespaces")
     
     for account_name in accounts.keys():
         manager = get_manager(account_name)
         if manager:
             display_codespaces_for_account(account_name, manager)
+    
+    # Auto-refresh mechanism for keepalive
+    if active_keepalives > 0:
+        st.markdown("---")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.caption("🔄 Auto-refresh is enabled due to active keepalive tasks")
+        with col2:
+            if st.button("🔄 Refresh Now", use_container_width=True):
+                st.rerun()
+        
+        # JavaScript auto-refresh after 60 seconds
+        st.markdown(
+            """
+            <script>
+                setTimeout(function() {
+                    window.location.reload();
+                }, 60000);
+            </script>
+            """,
+            unsafe_allow_html=True
+        )
 
 
 def display_create_codespace():
