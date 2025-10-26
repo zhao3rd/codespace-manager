@@ -130,21 +130,36 @@ class GitHubStorage:
                 response = requests.put(url, headers=self.headers, json=data)
                 
                 if response.status_code in [200, 201]:
+                    print(f"✅ GitHub storage: Successfully saved {task_count} tasks")
                     return True
                 elif response.status_code == 409:
                     # Conflict: file was modified by someone else, retry
-                    print(f"Conflict detected on attempt {attempt + 1}, retrying...")
+                    print(f"⚠️ GitHub storage: Conflict detected on attempt {attempt + 1}, retrying...")
                     continue
                 else:
-                    print(f"GitHub API error {response.status_code}: {response.text}")
+                    error_msg = f"GitHub API error {response.status_code}"
+                    try:
+                        error_detail = response.json()
+                        if 'message' in error_detail:
+                            error_msg += f": {error_detail['message']}"
+                    except:
+                        error_msg += f": {response.text[:200]}"
+                    
+                    print(f"❌ GitHub storage: {error_msg}")
+                    print(f"   URL: {url}")
+                    print(f"   Repo: {self.repo}")
+                    print(f"   Branch: {self.branch}")
+                    print(f"   File: {self.file_path}")
                     return False
                     
             except Exception as e:
-                print(f"Error saving to GitHub (attempt {attempt + 1}): {e}")
+                print(f"❌ GitHub storage: Error on attempt {attempt + 1}: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
                 if attempt == self.max_retries - 1:
                     return False
         
-        print(f"Failed to save after {self.max_retries} attempts")
+        print(f"❌ GitHub storage: Failed to save after {self.max_retries} attempts")
         return False
     
     def load_tasks(self) -> Dict:

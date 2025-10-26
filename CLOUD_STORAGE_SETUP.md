@@ -210,7 +210,11 @@ GitHub Token 需要 `repo` 权限：
 
 ## 🔍 故障排查
 
-### Q: 配置后仍然丢失数据？
+### ⚠️ 如果遇到问题
+
+**详细的排查指南**：请查看 [故障排查指南](TROUBLESHOOTING.md) 📖
+
+快速检查：
 
 **检查清单**：
 1. ✅ Streamlit Secrets 已正确配置
@@ -219,10 +223,18 @@ GitHub Token 需要 `repo` 权限：
 4. ✅ 分支名称正确（通常是 `main`）
 5. ✅ Token 未过期
 
+**查看日志**：
+1. Streamlit Cloud → Manage app → Logs
+2. 查找 `🔧 Using GitHub storage backend` 信息
+3. 查找错误信息（`❌ GitHub storage:`）
+
+### Q: 配置后仍然丢失数据？
+
 **调试步骤**：
-1. 查看 Streamlit Cloud 日志
-2. 检查 GitHub 仓库是否有 `keepalive_tasks.json` 文件
-3. 尝试手动刷新应用
+1. 查看 Streamlit Cloud 日志（详细错误信息）
+2. 检查 GitHub 仓库是否有 `codespace-manager/keepalive_tasks.json` 文件
+3. 使用 `test_github_storage.py` 诊断工具
+4. 参考 [故障排查指南](TROUBLESHOOTING.md)
 
 ### Q: GitHub API 限流？
 

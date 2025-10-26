@@ -32,11 +32,27 @@ class KeepaliveStorage:
                 branch = st.secrets['github_storage'].get('branch', 'main')
                 
                 if token and repo:
+                    print(f"🔧 Using GitHub storage backend")
+                    print(f"   Repo: {repo}")
+                    print(f"   Branch: {branch}")
+                    print(f"   Token: {'✅ configured' if token else '❌ missing'}")
                     return GitHubStorage(token, repo, branch)
-        except Exception:
-            pass
+                else:
+                    print(f"⚠️ GitHub storage config incomplete:")
+                    print(f"   Token: {'✅' if token else '❌ missing'}")
+                    print(f"   Repo: {'✅ ' + repo if repo else '❌ missing'}")
+            else:
+                if hasattr(st, 'secrets'):
+                    print(f"ℹ️ 'github_storage' not found in Streamlit secrets")
+                else:
+                    print(f"ℹ️ Streamlit secrets not available")
+        except Exception as e:
+            print(f"⚠️ Error initializing GitHub storage: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
         
         # Fallback to local file storage
+        print(f"📁 Falling back to local file storage")
         return None
     
     @staticmethod
@@ -50,10 +66,17 @@ class KeepaliveStorage:
         Returns:
             True if successful
         """
+        print(f"\n💾 Saving {len(tasks)} keepalive task(s)...")
+        
         # Try GitHub storage first
         github_storage = KeepaliveStorage._get_storage_backend()
         if github_storage:
-            return github_storage.save_tasks(tasks)
+            result = github_storage.save_tasks(tasks)
+            if result:
+                print(f"✅ Successfully saved to GitHub")
+            else:
+                print(f"❌ Failed to save to GitHub")
+            return result
         
         # Fallback to local file storage
         try:

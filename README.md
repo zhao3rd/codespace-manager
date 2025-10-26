@@ -252,6 +252,7 @@ streamlit run streamlit_app.py
 - [保活功能指南](KEEPALIVE_GUIDE.md)
 - [云存储配置](CLOUD_STORAGE_SETUP.md) ⭐ Streamlit Cloud 必读
 - [并发控制 FAQ](CONCURRENCY_FAQ.md) - 多人使用说明
+- [故障排查指南](TROUBLESHOOTING.md) 🔧 遇到问题？看这里
 
 ### 创建新 Codespace
 
@@ -447,6 +448,27 @@ A:
 - 本地运行时使用 `accounts.json`
 - Cloud 运行时使用 Streamlit Secrets
 - 如果需要同步，手动将 `accounts.json` 内容复制到 Secrets 中
+
+## 📚 完整文档
+
+### 快速开始
+- [快速入门](QUICKSTART.md) - 5 分钟快速上手
+- [部署指南](DEPLOYMENT.md) - 本地和云端部署
+
+### 功能指南
+- [保活功能指南](KEEPALIVE_GUIDE.md) - 详细的保活功能说明
+- [云存储配置](CLOUD_STORAGE_SETUP.md) ⭐ - Streamlit Cloud 持久化
+- [并发控制 FAQ](CONCURRENCY_FAQ.md) - 多人使用说明
+
+### 问题排查
+- [故障排查指南](TROUBLESHOOTING.md) 🔧 - GitHub 存储问题排查
+- [安全指南](SECURITY.md) - 安全最佳实践
+
+### 其他
+- [项目总览](PROJECT_OVERVIEW.md) - 架构和技术栈
+- [更新日志](CHANGELOG.md) - 版本历史
+
+---
 
 ## 📞 联系方式
 
