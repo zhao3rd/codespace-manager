@@ -11,7 +11,7 @@ pip install -r requirements.txt
 ### 步骤 2: 运行应用 (10 秒)
 
 ```bash
-streamlit run app.py
+streamlit run streamlit_app.py
 ```
 
 ### 步骤 3: 添加第一个账户 (2 分钟)

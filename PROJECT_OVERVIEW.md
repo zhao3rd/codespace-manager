@@ -62,7 +62,7 @@
 codespace-manager/
 │
 ├── 核心代码
-│   ├── app.py                      # 主应用（多账户支持）
+│   ├── streamlit_app.py            # 主应用（多账户支持）
 │   ├── github_api.py               # GitHub API 封装
 │   └── config.py                   # 配置管理
 │

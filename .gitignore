@@ -36,6 +36,9 @@ venv.bak/
 # Accounts
 accounts.json
 
+# Keepalive Tasks
+keepalive_tasks.json
+
 # IDE
 .vscode/
 .idea/

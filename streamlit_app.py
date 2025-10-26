@@ -6,6 +6,7 @@ import streamlit as st
 from datetime import datetime
 from github_api import GitHubCodespacesManager
 from config import Config
+from keepalive_storage import KeepaliveStorage
 import time
 from typing import Dict, Optional
 
@@ -36,7 +37,12 @@ def init_session_state():
     if "show_add_account" not in st.session_state:
         st.session_state.show_add_account = False
     if "keepalive_tasks" not in st.session_state:
-        st.session_state.keepalive_tasks = {}
+        # Load keepalive tasks from persistent storage
+        st.session_state.keepalive_tasks = KeepaliveStorage.load_tasks()
+        # Clear expired tasks on startup
+        cleared = KeepaliveStorage.clear_expired_tasks()
+        if cleared > 0:
+            st.session_state.keepalive_tasks = KeepaliveStorage.load_tasks()
     if "show_keepalive_dialog" not in st.session_state:
         st.session_state.show_keepalive_dialog = {}
     if "last_keepalive_check" not in st.session_state:
@@ -370,7 +376,9 @@ def check_and_maintain_keepalive(account_name: str, cs_name: str, manager: GitHu
     
     # Check if keepalive period has expired
     if elapsed_hours >= keepalive_hours:
+        # Remove from both session and storage
         st.session_state.keepalive_tasks.pop(task_key, None)
+        KeepaliveStorage.remove_task(account_name, cs_name)
         return
     
     # Check codespace status
@@ -494,8 +502,9 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                             with st.spinner("Stopping..."):
                                 try:
                                     manager.stop_codespace(cs_name)
-                                    # Remove keepalive task if exists
+                                    # Remove keepalive task from both session and storage
                                     st.session_state.keepalive_tasks.pop(task_key, None)
+                                    KeepaliveStorage.remove_task(account_name, cs_name)
                                     st.success(f"✅ Stopped")
                                     time.sleep(1)
                                     st.rerun()
@@ -511,7 +520,9 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                 with action_cols[2]:
                     if is_keepalive_active:
                         if st.button("❌", key=f"stop_keepalive_{account_name}_{idx}", help="Stop keepalive", use_container_width=True):
+                            # Remove from both session and storage
                             st.session_state.keepalive_tasks.pop(task_key, None)
+                            KeepaliveStorage.remove_task(account_name, cs_name)
                             st.success("Keepalive stopped")
                             st.rerun()
             
@@ -534,15 +545,26 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                             with st.spinner("Starting with keepalive..."):
                                 try:
                                     manager.start_codespace(cs_name)
-                                    # Add keepalive task
+                                    start_time = datetime.now()
+                                    
+                                    # Add keepalive task to session state
                                     st.session_state.keepalive_tasks[task_key] = {
-                                        'start_time': datetime.now(),
+                                        'start_time': start_time,
                                         'keepalive_hours': keepalive_hours,
                                         'account_name': account_name,
                                         'cs_name': cs_name
                                     }
+                                    
+                                    # Save to persistent storage
+                                    KeepaliveStorage.add_task(
+                                        account_name=account_name,
+                                        cs_name=cs_name,
+                                        start_time=start_time,
+                                        keepalive_hours=keepalive_hours
+                                    )
+                                    
                                     st.session_state.show_keepalive_dialog[task_key] = False
-                                    st.success(f"✅ Started with {keepalive_hours}h keepalive")
+                                    st.success(f"✅ Started with {keepalive_hours}h keepalive (saved)")
                                     time.sleep(1)
                                     st.rerun()
                                 except Exception as e:
@@ -572,7 +594,7 @@ def display_all_codespaces():
     # Display keepalive status summary
     active_keepalives = len(st.session_state.keepalive_tasks)
     if active_keepalives > 0:
-        st.info(f"🔄 {active_keepalives} active keepalive task(s). Page auto-refreshes every 60 seconds.")
+        st.info(f"🔄 {active_keepalives} active keepalive task(s). Page auto-refreshes every 10 minutes.")
         
         # Auto-refresh if there are active keepalive tasks
         if active_keepalives > 0:
@@ -595,18 +617,18 @@ def display_all_codespaces():
         st.markdown("---")
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.caption("🔄 Auto-refresh is enabled due to active keepalive tasks")
+            st.caption("🔄 Auto-refresh is enabled due to active keepalive tasks (every 10 minutes)")
         with col2:
             if st.button("🔄 Refresh Now", use_container_width=True):
                 st.rerun()
         
-        # JavaScript auto-refresh after 60 seconds
+        # JavaScript auto-refresh after 10 minutes (600 seconds)
         st.markdown(
             """
             <script>
                 setTimeout(function() {
                     window.location.reload();
-                }, 60000);
+                }, 600000);
             </script>
             """,
             unsafe_allow_html=True

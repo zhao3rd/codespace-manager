@@ -110,7 +110,7 @@ team_account = "ghp_your_team_token_here"
 ### 5. 运行应用
 
 ```bash
-streamlit run app.py
+streamlit run streamlit_app.py
 ```
 
 应用将在浏览器中自动打开（默认地址：`http://localhost:8501`）
@@ -217,13 +217,19 @@ streamlit run app.py
 
 **保活期间**：
 - 显示 🔄 图标和剩余时间
-- 页面每 60 秒自动刷新检查状态
+- 页面每 10 分钟自动刷新检查状态
 - 如果 Codespace 停止，自动重启
 - 超过设定时间后自动取消保活
+- **💾 自动保存，重启后恢复**
 
 **停止保活**：
 - 点击 **⏸️** 停止 Codespace（同时取消保活）
 - 或点击 **❌** 只取消保活但不停止 Codespace
+
+**持久化特性** 🆕：
+- ✅ 保活任务自动保存到 `keepalive_tasks.json`
+- ✅ 应用重启后自动恢复未过期的任务
+- ✅ 本地和 Cloud 都支持
 
 📖 详细说明请查看：[保活功能指南](KEEPALIVE_GUIDE.md)
 

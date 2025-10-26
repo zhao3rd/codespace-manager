@@ -119,7 +119,7 @@ pip install -r requirements.txt
 ### 方式二：手动更新文件
 
 只需更新以下文件：
-- `app.py`
+- `streamlit_app.py`（原 `app.py`）
 - `requirements.txt`
 - `.streamlit/secrets.toml.example`
 

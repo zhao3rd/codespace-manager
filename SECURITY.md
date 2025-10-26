@@ -135,6 +135,7 @@ work = "ghp_work_token"
 
 以下文件已在 `.gitignore` 中：
 - ✅ `accounts.json` - 本地账户存储
+- ✅ `keepalive_tasks.json` - 保活任务数据 🆕
 - ✅ `.streamlit/secrets.toml` - 本地 secrets
 - ✅ `.env` - 环境变量
 
@@ -179,6 +180,9 @@ GitHub Token：
 - 登录凭证（Secrets）
 - GitHub 账户配置（accounts.json / Secrets）
 - GitHub Tokens（accounts.json / Secrets）
+- **保活任务（keepalive_tasks.json）** 🆕
+  - 自动恢复未过期的保活任务
+  - 继续监控和维护
 
 ❌ **不会保留**：
 - 登录状态（需要重新登录）

@@ -19,7 +19,7 @@ cp accounts.json.example accounts.json
 # 编辑 accounts.json 添加你的 token
 
 # 4. 运行
-streamlit run app.py
+streamlit run streamlit_app.py
 ```
 
 ### 使用虚拟环境（推荐）
@@ -38,7 +38,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # 运行
-streamlit run app.py
+streamlit run streamlit_app.py
 ```
 
 ### Docker 部署（可选）
@@ -57,7 +57,7 @@ COPY . .
 
 EXPOSE 8501
 
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
 ```
 
 构建和运行：
@@ -88,7 +88,7 @@ docker run -p 8501:8501 -v $(pwd)/accounts.json:/app/accounts.json codespace-man
    - 点击 "New app"
    - 连接 GitHub 账户
    - 选择仓库和分支
-   - 主文件选择 `app.py`
+   - 主文件选择 `streamlit_app.py`（或留空，自动识别）
    - 点击 "Deploy"
 
 3. **配置 Secrets**
@@ -119,7 +119,7 @@ pip install streamlit
 streamlit login
 
 # 部署
-streamlit deploy app.py
+streamlit deploy streamlit_app.py
 ```
 
 ### Secrets 配置详解
