@@ -59,15 +59,15 @@ class KeepaliveStorage:
     def save_tasks(tasks: Dict) -> bool:
         """
         Save keepalive tasks to storage (GitHub or local file)
-        
+
         Args:
             tasks: Dictionary of keepalive tasks
-            
+
         Returns:
             True if successful
         """
         print(f"\n💾 Saving {len(tasks)} keepalive task(s)...")
-        
+
         # Try GitHub storage first
         github_storage = KeepaliveStorage._get_storage_backend()
         if github_storage:
@@ -77,7 +77,7 @@ class KeepaliveStorage:
             else:
                 print(f"❌ Failed to save to GitHub")
             return result
-        
+
         # Fallback to local file storage
         try:
             # Convert datetime objects to ISO format strings
@@ -87,12 +87,14 @@ class KeepaliveStorage:
                     'account_name': task['account_name'],
                     'cs_name': task['cs_name'],
                     'start_time': task['start_time'].isoformat(),
-                    'keepalive_hours': task['keepalive_hours']
+                    'keepalive_hours': task['keepalive_hours'],
+                    'created_by': task.get('created_by', 'unknown'),
+                    'created_at': task['created_at'].isoformat() if hasattr(task['created_at'], 'isoformat') else task['created_at']
                 }
-            
+
             with open(KeepaliveStorage.STORAGE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(serializable_tasks, f, indent=2)
-            
+
             return True
         except Exception as e:
             print(f"Error saving keepalive tasks: {e}")
@@ -136,7 +138,9 @@ class KeepaliveStorage:
                         'account_name': task['account_name'],
                         'cs_name': task['cs_name'],
                         'start_time': start_time,
-                        'keepalive_hours': keepalive_hours
+                        'keepalive_hours': keepalive_hours,
+                        'created_by': task.get('created_by', 'unknown'),
+                        'created_at': datetime.fromisoformat(task['created_at']) if 'created_at' in task else start_time
                     }
             
             return tasks
@@ -145,29 +149,32 @@ class KeepaliveStorage:
             return {}
     
     @staticmethod
-    def add_task(account_name: str, cs_name: str, start_time: datetime, keepalive_hours: float) -> bool:
+    def add_task(account_name: str, cs_name: str, start_time: datetime, keepalive_hours: float, created_by: str = None) -> bool:
         """
         Add a new keepalive task
-        
+
         Args:
             account_name: Account name
             cs_name: Codespace name
             start_time: Start time
             keepalive_hours: Keepalive duration in hours
-            
+            created_by: User who created this task
+
         Returns:
             True if successful
         """
         tasks = KeepaliveStorage.load_tasks()
         task_key = f"{account_name}_{cs_name}"
-        
+
         tasks[task_key] = {
             'account_name': account_name,
             'cs_name': cs_name,
             'start_time': start_time,
-            'keepalive_hours': keepalive_hours
+            'keepalive_hours': keepalive_hours,
+            'created_by': created_by or 'unknown',
+            'created_at': datetime.now()
         }
-        
+
         return KeepaliveStorage.save_tasks(tasks)
     
     @staticmethod
@@ -219,15 +226,44 @@ class KeepaliveStorage:
     def get_task(account_name: str, cs_name: str) -> Optional[Dict]:
         """
         Get a specific keepalive task
-        
+
         Args:
             account_name: Account name
             cs_name: Codespace name
-            
+
         Returns:
             Task dictionary or None
         """
         tasks = KeepaliveStorage.load_tasks()
         task_key = f"{account_name}_{cs_name}"
         return tasks.get(task_key)
+
+    @staticmethod
+    def can_manage_task(task: Dict, current_user: str) -> bool:
+        """
+        Check if current user can manage the task
+
+        Args:
+            task: Task dictionary
+            current_user: Current user identifier
+
+        Returns:
+            True if user can manage the task
+        """
+        if not task:
+            return False
+
+        # For now, allow all users to manage all tasks
+        # This can be extended to implement proper permission management
+        return True
+
+    @staticmethod
+    def get_all_active_tasks() -> Dict:
+        """
+        Get all active keepalive tasks (for backend service)
+
+        Returns:
+            Dictionary of all active tasks
+        """
+        return KeepaliveStorage.load_tasks()
 

@@ -18,6 +18,10 @@ class Config:
     DEFAULT_LOCATION = "WestUs2"
     DEFAULT_IDLE_TIMEOUT = 30
     DEFAULT_REF = "main"
+
+    # Keepalive settings
+    DEFAULT_KEEPALIVE_HOURS = 4.0
+    DEFAULT_KEEPALIVE_CHECK_INTERVAL = 120  # seconds (2 minutes)
     
     # Machine type options
     MACHINE_TYPES = [
@@ -106,10 +110,42 @@ class Config:
         return accounts
     
     @staticmethod
+    def get_keepalive_check_interval() -> int:
+        """
+        Get keepalive check interval from environment or default
+
+        Returns:
+            Check interval in seconds
+        """
+        try:
+            interval = os.getenv('KEEPALIVE_CHECK_INTERVAL')
+            if interval:
+                return int(interval)
+        except (ValueError, TypeError):
+            pass
+        return Config.DEFAULT_KEEPALIVE_CHECK_INTERVAL
+
+    @staticmethod
+    def get_default_keepalive_hours() -> float:
+        """
+        Get default keepalive duration from environment or default
+
+        Returns:
+            Default keepalive duration in hours
+        """
+        try:
+            hours = os.getenv('DEFAULT_KEEPALIVE_HOURS')
+            if hours:
+                return float(hours)
+        except (ValueError, TypeError):
+            pass
+        return Config.DEFAULT_KEEPALIVE_HOURS
+
+    @staticmethod
     def is_running_on_cloud() -> bool:
         """
         Check if running on Streamlit Cloud
-        
+
         Returns:
             True if running on Streamlit Cloud
         """

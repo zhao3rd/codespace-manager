@@ -8,7 +8,174 @@ from github_api import GitHubCodespacesManager
 from config import Config
 from keepalive_storage import KeepaliveStorage
 import time
+import threading
 from typing import Dict, Optional
+
+
+# Global keepalive service
+class KeepaliveService:
+    """Global keepalive service that runs in the background"""
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(KeepaliveService, cls).__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+
+        self._initialized = True
+        self._timer = None
+        self._running = False
+        self._last_check = None
+        self._accounts_cache = {}  # 缓存账户信息，避免依赖session_state
+        self._accounts_cache_time = None
+        print("🔧 KeepaliveService initialized")
+
+    def update_accounts_cache(self, accounts: Dict[str, str]):
+        """更新账户信息缓存"""
+        self._accounts_cache = accounts.copy()
+        self._accounts_cache_time = datetime.now()
+        print(f"📝 Updated accounts cache with {len(accounts)} accounts")
+
+    def start(self):
+        """Start the keepalive service"""
+        if self._running:
+            return
+
+        self._running = True
+        self._schedule_next_check()
+        print("🚀 KeepaliveService started")
+
+    def stop(self):
+        """Stop the keepalive service"""
+        self._running = False
+        if self._timer:
+            self._timer.cancel()
+            self._timer = None
+        print("🛑 KeepaliveService stopped")
+
+    def _schedule_next_check(self):
+        """Schedule the next keepalive check"""
+        if not self._running:
+            return
+
+        interval = Config.get_keepalive_check_interval()
+        self._timer = threading.Timer(interval, self._perform_keepalive_check)
+        self._timer.start()
+        print(f"⏰ Next keepalive check scheduled in {interval} seconds")
+
+    def _perform_keepalive_check(self):
+        """Perform the actual keepalive check"""
+        try:
+            print("🔄 Performing keepalive check...")
+            self._last_check = datetime.now()
+
+            # Get all active tasks
+            tasks = KeepaliveStorage.get_all_active_tasks()
+
+            if not tasks:
+                print("📭 No active keepalive tasks")
+            else:
+                print(f"📋 Processing {len(tasks)} keepalive task(s)")
+
+                # Group tasks by account
+                account_tasks = {}
+                for task_key, task in tasks.items():
+                    account_name = task['account_name']
+                    if account_name not in account_tasks:
+                        account_tasks[account_name] = []
+                    account_tasks[account_name].append(task)
+
+                # Process each account's tasks
+                for account_name, account_task_list in account_tasks.items():
+                    self._process_account_tasks(account_name, account_task_list)
+
+        except Exception as e:
+            print(f"❌ Keepalive check error: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Schedule next check
+        self._schedule_next_check()
+
+    def _process_account_tasks(self, account_name: str, tasks: list):
+        """Process keepalive tasks for a specific account"""
+        try:
+            # Get token from cache instead of session_state
+            token = self._accounts_cache.get(account_name)
+            if not token:
+                print(f"⚠️ No token found for account {account_name} in cache")
+                return
+
+            manager = GitHubCodespacesManager(token)
+
+            for task in tasks:
+                self._process_single_task(manager, task)
+
+        except Exception as e:
+            print(f"❌ Error processing tasks for {account_name}: {e}")
+
+    def _process_single_task(self, manager: GitHubCodespacesManager, task: Dict):
+        """Process a single keepalive task"""
+        account_name = task['account_name']
+        cs_name = task['cs_name']
+        start_time = task['start_time']
+        keepalive_hours = task['keepalive_hours']
+
+        try:
+            # Calculate elapsed time
+            current_time = datetime.now()
+            elapsed_hours = (current_time - start_time).total_seconds() / 3600
+
+            print(f"  📊 Task {account_name}_{cs_name}: {elapsed_hours:.1f}h elapsed, {keepalive_hours:.1f}h total")
+
+            # Check if task has expired
+            if elapsed_hours >= keepalive_hours:
+                print(f"    ⏰ Task expired, removing...")
+                KeepaliveStorage.remove_task(account_name, cs_name)
+                return
+
+            # Get codespace status
+            cs = manager.get_codespace(cs_name)
+            if not cs:
+                print(f"    ❌ Codespace not found, removing task...")
+                KeepaliveStorage.remove_task(account_name, cs_name)
+                return
+
+            state = cs.get('state', 'Unknown')
+            print(f"    📈 Codespace status: {state}")
+
+            # Restart if not running
+            if state in ["Stopped", "Shutdown"]:
+                print(f"    🔄 Restarting codespace...")
+                manager.start_codespace(cs_name)
+                print(f"    ✅ Codespace restarted")
+            elif state == "Available":
+                print(f"    ✅ Codespace is running")
+            else:
+                print(f"    ⏳ Codespace state: {state}")
+
+        except Exception as e:
+            print(f"    ❌ Error processing task {account_name}_{cs_name}: {e}")
+
+    def get_status(self) -> Dict:
+        """Get service status"""
+        return {
+            'running': self._running,
+            'last_check': self._last_check,
+            'next_check_in': self._timer and self._timer.interval or None
+        }
+
+
+# Global keepalive service instance
+keepalive_service = KeepaliveService()
 
 
 # Page configuration
@@ -47,6 +214,13 @@ def init_session_state():
         st.session_state.show_keepalive_dialog = {}
     if "last_keepalive_check" not in st.session_state:
         st.session_state.last_keepalive_check = {}
+
+    # Start keepalive service if not already running
+    if not keepalive_service.get_status()['running']:
+        keepalive_service.start()
+
+    # Update service accounts cache
+    keepalive_service.update_accounts_cache(st.session_state.accounts)
 
 
 def check_login_credentials(username: str, password: str) -> bool:
@@ -94,6 +268,7 @@ def display_login_page():
                 if check_login_credentials(username, password):
                     st.session_state.authenticated_user = True
                     st.session_state.accounts = Config.get_all_accounts()
+                    keepalive_service.update_accounts_cache(st.session_state.accounts)
                     st.success("✅ Login successful!")
                     time.sleep(0.5)
                     st.rerun()
@@ -154,14 +329,17 @@ def add_account(account_name: str, token: str) -> bool:
         st.session_state.accounts[account_name] = token
         st.session_state.managers[account_name] = manager
         st.session_state.user_infos[account_name] = user_info
-        
+
+        # Update service cache
+        keepalive_service.update_accounts_cache(st.session_state.accounts)
+
         # Save to local file if not on cloud or if it's a user-added account
         if not Config.is_running_on_cloud():
             Config.save_local_accounts(st.session_state.accounts)
         else:
             # On cloud, save only user-added accounts (not from secrets)
             streamlit_accounts = Config.load_streamlit_secrets()
-            local_accounts = {k: v for k, v in st.session_state.accounts.items() 
+            local_accounts = {k: v for k, v in st.session_state.accounts.items()
                             if k not in streamlit_accounts}
             Config.save_local_accounts(local_accounts)
         
@@ -195,11 +373,14 @@ def remove_account(account_name: str) -> bool:
             del st.session_state.managers[account_name]
         if account_name in st.session_state.user_infos:
             del st.session_state.user_infos[account_name]
-        
+
         # Update current account if needed
         if st.session_state.current_account == account_name:
             st.session_state.current_account = None
-        
+
+        # Update service cache
+        keepalive_service.update_accounts_cache(st.session_state.accounts)
+
         # Save to local file
         Config.save_local_accounts(st.session_state.accounts)
         
@@ -322,7 +503,19 @@ def display_sidebar():
             st.info("💻 Running locally")
         
         st.caption(f"Total Accounts: **{len(accounts)}**")
-        
+
+        # Keepalive service status
+        st.divider()
+        st.header("🔧 Keepalive Service")
+        service_status = keepalive_service.get_status()
+        if service_status['running']:
+            st.success("🟢 Service Active")
+            if service_status['last_check']:
+                st.caption(f"Last check: {service_status['last_check'].strftime('%H:%M:%S')}")
+            st.caption(f"Interval: {Config.get_keepalive_check_interval()}s")
+        else:
+            st.error("🔴 Service Stopped")
+
         # Logout button
         st.divider()
         if st.button("🔓 Logout", use_container_width=True):
@@ -330,6 +523,7 @@ def display_sidebar():
             st.session_state.accounts = {}
             st.session_state.managers = {}
             st.session_state.user_infos = {}
+            keepalive_service.update_accounts_cache({})
             st.rerun()
         
         # Help section
@@ -340,12 +534,18 @@ def display_sidebar():
         - Manage multiple GitHub accounts
         - Each account has its own token
         - Add/Remove accounts dynamically
-        
+
+        **Keepalive Service:**
+        - 🔄 Backend-managed automatic keepalive
+        - ⏰ Configurable check interval (default: 120s)
+        - ⏱️ Time-limited keepalive (default: 4h)
+        - 🌐 Works without keeping page open
+
         **Token Sources:**
         - 🔒 Streamlit Secrets (Cloud)
         - 💾 Local JSON file
         - ➕ Manually added
-        
+
         **Storage Location:**
         - Local: `accounts.json`
         - Cloud: Streamlit Secrets
@@ -355,46 +555,31 @@ def display_sidebar():
 
 def check_and_maintain_keepalive(account_name: str, cs_name: str, manager: GitHubCodespacesManager):
     """
-    Check and maintain keepalive for a codespace
-    
+    Check keepalive status for display purposes only
+    Main keepalive logic is now handled by the backend KeepaliveService
+
     Args:
         account_name: Account name
         cs_name: Codespace name
         manager: GitHubCodespacesManager instance
     """
     task_key = f"{account_name}_{cs_name}"
-    
+
     if task_key not in st.session_state.keepalive_tasks:
         return
-    
+
     task = st.session_state.keepalive_tasks[task_key]
     start_time = task['start_time']
     keepalive_hours = task['keepalive_hours']
-    
-    # Calculate elapsed time
+
+    # Calculate elapsed time for display
     elapsed_hours = (datetime.now() - start_time).total_seconds() / 3600
-    
-    # Check if keepalive period has expired
+
+    # Check if keepalive period has expired (cleanup expired tasks from session)
     if elapsed_hours >= keepalive_hours:
-        # Remove from both session and storage
+        # Remove from session storage (backend service will handle persistent storage)
         st.session_state.keepalive_tasks.pop(task_key, None)
-        KeepaliveStorage.remove_task(account_name, cs_name)
         return
-    
-    # Check codespace status
-    try:
-        cs = manager.get_codespace(cs_name)
-        state = cs.get('state', 'Unknown')
-        
-        # If not running, try to restart
-        if state in ["Stopped", "Shutdown"]:
-            try:
-                manager.start_codespace(cs_name)
-                st.session_state.last_keepalive_check[task_key] = datetime.now()
-            except Exception:
-                pass
-    except Exception:
-        pass
 
 
 def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesManager):
@@ -534,7 +719,7 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                         "Keepalive Duration (hours)",
                         min_value=0.5,
                         max_value=24.0,
-                        value=4.0,
+                        value=Config.get_default_keepalive_hours(),
                         step=0.5,
                         help="Codespace will be kept alive for this duration"
                     )
@@ -552,15 +737,17 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                                         'start_time': start_time,
                                         'keepalive_hours': keepalive_hours,
                                         'account_name': account_name,
-                                        'cs_name': cs_name
+                                        'cs_name': cs_name,
+                                        'created_by': st.session_state.authenticated_user
                                     }
-                                    
+
                                     # Save to persistent storage
                                     KeepaliveStorage.add_task(
                                         account_name=account_name,
                                         cs_name=cs_name,
                                         start_time=start_time,
-                                        keepalive_hours=keepalive_hours
+                                        keepalive_hours=keepalive_hours,
+                                        created_by=st.session_state.authenticated_user
                                     )
                                     
                                     st.session_state.show_keepalive_dialog[task_key] = False
@@ -593,46 +780,36 @@ def display_all_codespaces():
     
     # Display keepalive status summary
     active_keepalives = len(st.session_state.keepalive_tasks)
+
+    # Show keepalive service status
+    service_status = keepalive_service.get_status()
+    if service_status['running']:
+        st.success(f"🔄 Keepalive service is active (check interval: {Config.get_keepalive_check_interval()}s)")
+        if service_status['last_check']:
+            st.caption(f"Last check: {service_status['last_check'].strftime('%H:%M:%S')}")
+    else:
+        st.warning("⚠️ Keepalive service is not running")
+
     if active_keepalives > 0:
-        st.info(f"🔄 {active_keepalives} active keepalive task(s). Page auto-refreshes every 10 minutes.")
-        
-        # Auto-refresh if there are active keepalive tasks
-        if active_keepalives > 0:
-            # Use a placeholder for auto-refresh countdown
-            import time as time_module
-            refresh_placeholder = st.empty()
-            
-            # Show countdown and refresh after 60 seconds
-            st.markdown("---")
-    
+        st.info(f"📊 {active_keepalives} active keepalive task(s) - managed by backend service")
+
     st.header("📋 All Codespaces")
-    
+
     for account_name in accounts.keys():
         manager = get_manager(account_name)
         if manager:
             display_codespaces_for_account(account_name, manager)
-    
-    # Auto-refresh mechanism for keepalive
+
+    # Manual refresh controls
     if active_keepalives > 0:
         st.markdown("---")
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.caption("🔄 Auto-refresh is enabled due to active keepalive tasks (every 10 minutes)")
+            st.caption("💡 Keepalive is managed by backend service - no need to keep page open")
         with col2:
-            if st.button("🔄 Refresh Now", use_container_width=True):
+            if st.button("🔄 Refresh Status", use_container_width=True):
+                st.session_state.keepalive_tasks = KeepaliveStorage.load_tasks()
                 st.rerun()
-        
-        # JavaScript auto-refresh after 10 minutes (600 seconds)
-        st.markdown(
-            """
-            <script>
-                setTimeout(function() {
-                    window.location.reload();
-                }, 600000);
-            </script>
-            """,
-            unsafe_allow_html=True
-        )
 
 
 def display_create_codespace():
