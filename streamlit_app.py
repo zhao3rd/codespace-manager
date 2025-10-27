@@ -86,16 +86,17 @@ class KeepaliveService:
     def _perform_keepalive_check(self):
         """Perform the actual keepalive check"""
         try:
-            print("🔄 Performing keepalive check...")
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            print(f"🔄 [{current_time}] Performing keepalive check...")
             self._last_check = datetime.now()
 
             # Get all active tasks
             tasks = KeepaliveStorage.get_all_active_tasks()
 
             if not tasks:
-                print("📭 No active keepalive tasks")
+                print(f"📭 [{current_time}] No active keepalive tasks")
             else:
-                print(f"📋 Processing {len(tasks)} keepalive task(s)")
+                print(f"📋 [{current_time}] Processing {len(tasks)} keepalive task(s)")
 
                 # Group tasks by account
                 account_tasks = {}
@@ -145,38 +146,38 @@ class KeepaliveService:
         try:
             # Calculate elapsed time
             current_time = datetime.now()
+            time_str = current_time.strftime('%H:%M:%S')
             elapsed_hours = (current_time - start_time).total_seconds() / 3600
 
-            print(f"  📊 Task {account_name}_{cs_name}: {elapsed_hours:.1f}h elapsed, {keepalive_hours:.1f}h total")
+            print(f"  📊 [{time_str}] {account_name}_{cs_name}: {elapsed_hours:.1f}h/{keepalive_hours:.1f}h")
 
             # Check if task has expired
             if elapsed_hours >= keepalive_hours:
-                print(f"    ⏰ Task expired, removing...")
+                print(f"    ⏰ [{time_str}] Task expired, removing...")
                 KeepaliveStorage.remove_task(account_name, cs_name)
                 return
 
             # Get codespace status
             cs = manager.get_codespace(cs_name)
             if not cs:
-                print(f"    ❌ Codespace not found, removing task...")
+                print(f"    ❌ [{time_str}] Codespace not found, removing task...")
                 KeepaliveStorage.remove_task(account_name, cs_name)
                 return
 
             state = cs.get('state', 'Unknown')
-            print(f"    📈 Codespace status: {state}")
 
             # Restart if not running
             if state in ["Stopped", "Shutdown"]:
-                print(f"    🔄 Restarting codespace...")
+                print(f"    🔄 [{time_str}] Restarting codespace (state: {state})...")
                 manager.start_codespace(cs_name)
-                print(f"    ✅ Codespace restarted")
+                print(f"    ✅ [{time_str}] Codespace restarted successfully")
             elif state == "Available":
-                print(f"    ✅ Codespace is running")
+                print(f"    ✅ [{time_str}] Codespace is running")
             else:
-                print(f"    ⏳ Codespace state: {state}")
+                print(f"    ⏳ [{time_str}] Codespace state: {state}")
 
         except Exception as e:
-            print(f"    ❌ Error processing task {account_name}_{cs_name}: {e}")
+            print(f"    ❌ [{time_str}] Error processing task {account_name}_{cs_name}: {e}")
 
     def get_status(self) -> Dict:
         """Get service status"""
@@ -189,6 +190,11 @@ class KeepaliveService:
 
 # Global keepalive service instance
 keepalive_service = KeepaliveService()
+
+# Start keepalive service globally (independent of user sessions)
+print("🚀 Starting global keepalive service...")
+keepalive_service.start()
+print("✅ Global keepalive service started")
 
 
 # Page configuration
@@ -228,9 +234,7 @@ def init_session_state():
     if "last_keepalive_check" not in st.session_state:
         st.session_state.last_keepalive_check = {}
 
-    # Start keepalive service if not already running
-    if not keepalive_service.get_status()['running']:
-        keepalive_service.start()
+    # Keepalive service is now started globally, no need to start here
 
 
 def check_login_credentials(username: str, password: str) -> bool:
@@ -775,11 +779,11 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
 def display_all_codespaces():
     """Display codespaces for all accounts"""
     accounts = st.session_state.accounts
-    
+
     if not accounts:
         st.info("👈 Please add an account using the sidebar")
         return
-    
+
     # Display keepalive status summary
     active_keepalives = len(st.session_state.keepalive_tasks)
 
