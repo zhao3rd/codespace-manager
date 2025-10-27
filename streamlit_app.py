@@ -34,15 +34,27 @@ class KeepaliveService:
         self._timer = None
         self._running = False
         self._last_check = None
-        self._accounts_cache = {}  # 缓存账户信息，避免依赖session_state
-        self._accounts_cache_time = None
         print("🔧 KeepaliveService initialized")
 
-    def update_accounts_cache(self, accounts: Dict[str, str]):
-        """更新账户信息缓存"""
-        self._accounts_cache = accounts.copy()
-        self._accounts_cache_time = datetime.now()
-        print(f"📝 Updated accounts cache with {len(accounts)} accounts")
+    def get_accounts_directly(self) -> Dict[str, str]:
+        """直接从配置源获取账户信息，不依赖session_state"""
+        try:
+            # 首先从Streamlit secrets获取
+            streamlit_accounts = Config.load_streamlit_secrets()
+
+            # 然后从本地文件获取
+            local_accounts = Config.load_local_accounts()
+
+            # 合并，secrets优先
+            accounts = local_accounts.copy()
+            accounts.update(streamlit_accounts)
+
+            print(f"📝 Loaded {len(accounts)} accounts from config sources")
+            return accounts
+
+        except Exception as e:
+            print(f"❌ Error loading accounts from config: {e}")
+            return {}
 
     def start(self):
         """Start the keepalive service"""
@@ -108,10 +120,11 @@ class KeepaliveService:
     def _process_account_tasks(self, account_name: str, tasks: list):
         """Process keepalive tasks for a specific account"""
         try:
-            # Get token from cache instead of session_state
-            token = self._accounts_cache.get(account_name)
+            # Get token directly from config sources
+            accounts = self.get_accounts_directly()
+            token = accounts.get(account_name)
             if not token:
-                print(f"⚠️ No token found for account {account_name} in cache")
+                print(f"⚠️ No token found for account {account_name} in config")
                 return
 
             manager = GitHubCodespacesManager(token)
@@ -219,9 +232,6 @@ def init_session_state():
     if not keepalive_service.get_status()['running']:
         keepalive_service.start()
 
-    # Update service accounts cache
-    keepalive_service.update_accounts_cache(st.session_state.accounts)
-
 
 def check_login_credentials(username: str, password: str) -> bool:
     """
@@ -268,7 +278,6 @@ def display_login_page():
                 if check_login_credentials(username, password):
                     st.session_state.authenticated_user = True
                     st.session_state.accounts = Config.get_all_accounts()
-                    keepalive_service.update_accounts_cache(st.session_state.accounts)
                     st.success("✅ Login successful!")
                     time.sleep(0.5)
                     st.rerun()
@@ -330,9 +339,6 @@ def add_account(account_name: str, token: str) -> bool:
         st.session_state.managers[account_name] = manager
         st.session_state.user_infos[account_name] = user_info
 
-        # Update service cache
-        keepalive_service.update_accounts_cache(st.session_state.accounts)
-
         # Save to local file if not on cloud or if it's a user-added account
         if not Config.is_running_on_cloud():
             Config.save_local_accounts(st.session_state.accounts)
@@ -377,9 +383,6 @@ def remove_account(account_name: str) -> bool:
         # Update current account if needed
         if st.session_state.current_account == account_name:
             st.session_state.current_account = None
-
-        # Update service cache
-        keepalive_service.update_accounts_cache(st.session_state.accounts)
 
         # Save to local file
         Config.save_local_accounts(st.session_state.accounts)
@@ -523,7 +526,6 @@ def display_sidebar():
             st.session_state.accounts = {}
             st.session_state.managers = {}
             st.session_state.user_infos = {}
-            keepalive_service.update_accounts_cache({})
             st.rerun()
         
         # Help section
