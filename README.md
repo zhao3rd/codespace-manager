@@ -111,7 +111,7 @@ team_account = "ghp_your_team_token_here"
 ```
 
 > **重要**：配置 `github_storage` 可确保保活任务在 Streamlit Cloud 重启后不丢失。
-> 详见：[云存储配置指南](CLOUD_STORAGE_SETUP.md)
+> 详见：[云存储配置指南](CLOUD_STORAGE_SUMMARY.md)
 
 #### 方式三：应用内添加（最简单）
 
@@ -250,9 +250,7 @@ streamlit run streamlit_app.py
 
 📖 详细说明：
 - [保活功能指南](KEEPALIVE_GUIDE.md)
-- [云存储配置](CLOUD_STORAGE_SETUP.md) ⭐ Streamlit Cloud 必读
-- [并发控制 FAQ](CONCURRENCY_FAQ.md) - 多人使用说明
-- [故障排查指南](TROUBLESHOOTING.md) 🔧 遇到问题？看这里
+- [云存储配置](CLOUD_STORAGE_SUMMARY.md) ⭐ Streamlit Cloud 必读
 
 ### 创建新 Codespace
 
@@ -337,7 +335,6 @@ codespace-manager/
 - 登录凭证：Streamlit Secrets `[login]` 部分
 - 所有数据重启后自动加载
 
-📖 详细说明请查看：[SECURITY.md](SECURITY.md)
 
 ## ☁️ 部署到 Streamlit Cloud
 
@@ -449,38 +446,3 @@ A:
 - Cloud 运行时使用 Streamlit Secrets
 - 如果需要同步，手动将 `accounts.json` 内容复制到 Secrets 中
 
-## 📚 完整文档
-
-### 快速开始
-- [快速入门](QUICKSTART.md) - 5 分钟快速上手
-- [部署指南](DEPLOYMENT.md) - 本地和云端部署
-
-### 功能指南
-- [保活功能指南](KEEPALIVE_GUIDE.md) - 详细的保活功能说明
-- [云存储配置](CLOUD_STORAGE_SETUP.md) ⭐ - Streamlit Cloud 持久化
-- [并发控制 FAQ](CONCURRENCY_FAQ.md) - 多人使用说明
-
-### 问题排查
-- [故障排查指南](TROUBLESHOOTING.md) 🔧 - GitHub 存储问题排查
-- [安全指南](SECURITY.md) - 安全最佳实践
-
-### 其他
-- [项目总览](PROJECT_OVERVIEW.md) - 架构和技术栈
-- [更新日志](CHANGELOG.md) - 版本历史
-
----
-
-## 📞 联系方式
-
-如有问题或建议，欢迎通过 Issue 联系。
-
-## 🎯 使用场景
-
-- 个人开发者管理个人和工作账户
-- 团队管理多个组织账户的 Codespace
-- 自由职业者管理不同客户的项目
-- DevOps 团队集中管理开发环境
-
----
-
-⭐ 如果这个项目对你有帮助，请给它一个星标！
