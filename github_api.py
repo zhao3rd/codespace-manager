@@ -4,6 +4,11 @@ GitHub Codespaces API Integration Module
 import requests
 from typing import List, Dict, Optional
 import time
+import logging
+import random
+
+# Configure logger for this module
+logger = logging.getLogger(__name__)
 
 
 class GitHubCodespacesManager:
@@ -38,6 +43,14 @@ class GitHubCodespacesManager:
             data = response.json()
             return data.get("codespaces", [])
         except requests.exceptions.RequestException as e:
+            if hasattr(e, 'response') and e.response is not None:
+                status_code = e.response.status_code
+                rate_limit_remaining = e.response.headers.get('X-RateLimit-Remaining', 'unknown')
+                logger.error(f"GitHub API request failed - Method: GET, URL: {url}, "
+                           f"Status Code: {status_code}, Rate Limit Remaining: {rate_limit_remaining}, "
+                           f"Error: {type(e).__name__}: {str(e)}")
+            else:
+                logger.error(f"GitHub API request failed - Method: GET, URL: {url}, Error: {type(e).__name__}: {str(e)}")
             raise Exception(f"Failed to list codespaces: {str(e)}")
     
     def get_codespace(self, codespace_name: str) -> Dict:
@@ -56,6 +69,7 @@ class GitHubCodespacesManager:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
+            logger.error(f"GitHub API request failed - Method: GET, URL: {url}, Codespace: {codespace_name}, Error: {type(e).__name__}: {str(e)}")
             raise Exception(f"Failed to get codespace {codespace_name}: {str(e)}")
     
     def create_codespace(
@@ -91,6 +105,7 @@ class GitHubCodespacesManager:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
+            logger.error(f"GitHub API request failed - Method: POST, URL: {url}, Repository: {repository}, Ref: {ref}, Error: {type(e).__name__}: {str(e)}")
             raise Exception(f"Failed to create codespace: {str(e)}")
     
     def start_codespace(self, codespace_name: str) -> Dict:
@@ -109,6 +124,7 @@ class GitHubCodespacesManager:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
+            logger.error(f"GitHub API request failed - Method: POST, URL: {url}, Codespace: {codespace_name}, Error: {type(e).__name__}: {str(e)}")
             raise Exception(f"Failed to start codespace {codespace_name}: {str(e)}")
     
     def stop_codespace(self, codespace_name: str) -> Dict:
@@ -127,6 +143,7 @@ class GitHubCodespacesManager:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
+            logger.error(f"GitHub API request failed - Method: POST, URL: {url}, Codespace: {codespace_name}, Error: {type(e).__name__}: {str(e)}")
             raise Exception(f"Failed to stop codespace {codespace_name}: {str(e)}")
     
     def delete_codespace(self, codespace_name: str) -> bool:
@@ -145,6 +162,7 @@ class GitHubCodespacesManager:
             response.raise_for_status()
             return True
         except requests.exceptions.RequestException as e:
+            logger.error(f"GitHub API request failed - Method: DELETE, URL: {url}, Codespace: {codespace_name}, Error: {type(e).__name__}: {str(e)}")
             raise Exception(f"Failed to delete codespace {codespace_name}: {str(e)}")
     
     def list_available_machines(self, repository: str, ref: str = "main") -> List[Dict]:
@@ -166,20 +184,75 @@ class GitHubCodespacesManager:
             data = response.json()
             return data.get("machines", [])
         except requests.exceptions.RequestException as e:
+            logger.error(f"GitHub API request failed - Method: GET, URL: {url}, Repository: {repository}, Ref: {ref}, Error: {type(e).__name__}: {str(e)}")
             raise Exception(f"Failed to list machines: {str(e)}")
     
-    def get_user_info(self) -> Dict:
+    def get_user_info(self, max_retries: int = 2) -> Dict:
         """
-        Get authenticated user information
-        
+        Get authenticated user information with retry logic for transient failures
+
+        Args:
+            max_retries: Maximum number of retry attempts for transient failures
+
         Returns:
             User information
         """
         url = f"{self.base_url}/user"
-        try:
-            response = requests.get(url, headers=self.headers)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Failed to get user info: {str(e)}")
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.get(url, headers=self.headers)
+                response.raise_for_status()
+                return response.json()
+
+            except requests.exceptions.RequestException as e:
+                # Enhanced logging for user info endpoint debugging
+                if hasattr(e, 'response') and e.response is not None:
+                    status_code = e.response.status_code
+                    response_headers = dict(e.response.headers)
+
+                    # Log rate limit information if available
+                    rate_limit_remaining = response_headers.get('X-RateLimit-Remaining', 'unknown')
+                    rate_limit_reset = response_headers.get('X-RateLimit-Reset', 'unknown')
+
+                    logger.error(f"GitHub API request failed - Attempt {attempt + 1}/{max_retries + 1}, "
+                               f"Method: GET, URL: {url}, "
+                               f"Status Code: {status_code}, "
+                               f"Rate Limit Remaining: {rate_limit_remaining}, "
+                               f"Rate Limit Reset: {rate_limit_reset}, "
+                               f"Error: {type(e).__name__}: {str(e)}")
+
+                    # Additional logging for 403 errors
+                    if status_code == 403:
+                        logger.warning(f"403 Forbidden detected - Possible causes: "
+                                     f"1) Token lacks required permissions (need 'user' or 'read:user' scope), "
+                                     f"2) Rate limit exceeded, "
+                                     f"3) Token expired/revoked, "
+                                     f"4) GitHub service issues")
+
+                        # Retry on 403 errors (might be transient)
+                        if attempt < max_retries:
+                            wait_time = (2 ** attempt) + random.uniform(0, 1)  # Exponential backoff with jitter
+                            logger.info(f"Retrying in {wait_time:.2f} seconds...")
+                            time.sleep(wait_time)
+                            continue
+
+                else:
+                    logger.error(f"GitHub API request failed - Attempt {attempt + 1}/{max_retries + 1}, "
+                               f"Method: GET, URL: {url}, "
+                               f"Error: {type(e).__name__}: {str(e)}")
+
+                    # Retry on network errors
+                    if attempt < max_retries:
+                        wait_time = (2 ** attempt) + random.uniform(0, 1)
+                        logger.info(f"Retrying in {wait_time:.2f} seconds...")
+                        time.sleep(wait_time)
+                        continue
+
+                # If this is the last attempt, raise the exception
+                if attempt == max_retries:
+                    raise Exception(f"Failed to get user info after {max_retries + 1} attempts: {str(e)}")
+
+        # This should not be reached, but just in case
+        raise Exception(f"Failed to get user info: Unexpected error")
 
