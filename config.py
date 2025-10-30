@@ -21,7 +21,8 @@ class Config:
 
     # Keepalive settings
     DEFAULT_KEEPALIVE_HOURS = 4.0
-    DEFAULT_KEEPALIVE_CHECK_INTERVAL = 120  # seconds (2 minutes)
+    DEFAULT_KEEPALIVE_CHECK_INTERVAL = 120  # seconds (2 minutes) - deprecated, kept for compatibility
+    DEFAULT_CHECK_BUFFER_SECONDS = 1818  # 30 minutes 18 seconds
     
     # Machine type options
     MACHINE_TYPES = [
@@ -141,6 +142,40 @@ class Config:
             pass
         return Config.DEFAULT_KEEPALIVE_HOURS
 
+    @staticmethod
+    def get_check_buffer_seconds() -> int:
+        """
+        Get check buffer time from Streamlit secrets, environment variable, or default
+        
+        Priority order:
+        1. Streamlit secrets: keepalive.check_buffer_seconds
+        2. Environment variable: KEEPALIVE_CHECK_BUFFER_SECONDS
+        3. Default: DEFAULT_CHECK_BUFFER_SECONDS (1818)
+        
+        Returns:
+            Buffer time in seconds
+        """
+        # Try Streamlit secrets first
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'keepalive' in st.secrets:
+                buffer = st.secrets['keepalive'].get('check_buffer_seconds')
+                if buffer is not None:
+                    return int(buffer)
+        except Exception:
+            pass
+        
+        # Try environment variable
+        try:
+            buffer = os.getenv('KEEPALIVE_CHECK_BUFFER_SECONDS')
+            if buffer:
+                return int(buffer)
+        except (ValueError, TypeError):
+            pass
+        
+        # Return default
+        return Config.DEFAULT_CHECK_BUFFER_SECONDS
+    
     @staticmethod
     def is_running_on_cloud() -> bool:
         """

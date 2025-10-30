@@ -3,7 +3,7 @@ GitHub Codespaces Manager - Multi-Account Support
 Streamlit Application for managing multiple GitHub accounts' codespaces
 """
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta
 from github_api import GitHubCodespacesManager
 from config import Config
 from keepalive_storage import KeepaliveStorage
@@ -31,7 +31,8 @@ class KeepaliveService:
             return
 
         self._initialized = True
-        self._timer = None
+        self._timer = None  # Kept for backward compatibility
+        self._task_timers: Dict[str, threading.Timer] = {}  # Per-task timers
         self._running = False
         self._last_check = None
         print("🔧 KeepaliveService initialized")
@@ -62,128 +63,284 @@ class KeepaliveService:
             return
 
         self._running = True
-        self._schedule_next_check()
+        self._schedule_all_tasks()
         print("🚀 KeepaliveService started")
 
     def stop(self):
         """Stop the keepalive service"""
         self._running = False
+        
+        # Cancel old timer
         if self._timer:
             self._timer.cancel()
             self._timer = None
+        
+        # Cancel all task timers
+        for task_key, timer in list(self._task_timers.items()):
+            timer.cancel()
+        self._task_timers.clear()
+        
         print("🛑 KeepaliveService stopped")
 
-    def _schedule_next_check(self):
-        """Schedule the next keepalive check"""
+    def _schedule_all_tasks(self):
+        """Schedule all active tasks"""
         if not self._running:
             return
+        
+        tasks = KeepaliveStorage.get_all_active_tasks()
+        if not tasks:
+            print("📭 No active tasks to schedule")
+            return
+        
+        scheduled_count = 0
+        for task_key, task in tasks.items():
+            if self._schedule_task(task_key):
+                scheduled_count += 1
+        
+        print(f"⏰ Scheduled {scheduled_count} keepalive task(s)")
+    
+    def _schedule_task(self, task_key: str) -> bool:
+        """
+        Schedule a single task based on its next_check_time
+        
+        Args:
+            task_key: Task key (account_name_cs_name)
+        
+        Returns:
+            True if scheduled successfully
+        """
+        if not self._running:
+            return False
+        
+        # Cancel existing timer for this task
+        self._cancel_task_timer(task_key)
+        
+        # Get task
+        task = KeepaliveStorage.get_task_by_key(task_key)
+        if not task:
+            return False
+        
+        # Calculate delay
+        next_check_time = task.get('next_check_time')
+        if not next_check_time:
+            # If no next_check_time, calculate it
+            buffer_seconds = Config.get_check_buffer_seconds()
+            last_used_at = task.get('last_used_at') or task['start_time']
+            if isinstance(last_used_at, str):
+                last_used_at = datetime.fromisoformat(last_used_at)
+            next_check_time = last_used_at + timedelta(seconds=buffer_seconds)
+        
+        if isinstance(next_check_time, str):
+            next_check_time = datetime.fromisoformat(next_check_time)
+        
+        current_time = datetime.now()
+        delay_seconds = (next_check_time - current_time).total_seconds()
+        
+        # If time has passed, schedule immediately (small delay)
+        if delay_seconds < 0:
+            delay_seconds = 5  # 5 seconds delay
+        
+        # Create timer
+        timer = threading.Timer(delay_seconds, self._perform_keepalive_check, args=(task_key,))
+        timer.start()
+        self._task_timers[task_key] = timer
+        
+        return True
+    
+    def _cancel_task_timer(self, task_key: str):
+        """Cancel timer for a specific task"""
+        if task_key in self._task_timers:
+            self._task_timers[task_key].cancel()
+            del self._task_timers[task_key]
 
-        interval = Config.get_keepalive_check_interval()
-        self._timer = threading.Timer(interval, self._perform_keepalive_check)
-        self._timer.start()
-        print(f"⏰ Next keepalive check scheduled in {interval} seconds")
-
-    def _perform_keepalive_check(self):
-        """Perform the actual keepalive check"""
+    def _perform_keepalive_check(self, task_key: str):
+        """
+        Perform keepalive check for a single task
+        
+        Args:
+            task_key: Task key (account_name_cs_name)
+        """
         try:
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            print(f"🔄 [{current_time}] Performing keepalive check...")
-            self._last_check = datetime.now()
-
-            # Get all active tasks
-            tasks = KeepaliveStorage.get_all_active_tasks()
-
-            if not tasks:
-                print(f"📭 [{current_time}] No active keepalive tasks")
-            else:
-                print(f"📋 [{current_time}] Processing {len(tasks)} keepalive task(s)")
-
-                # Group tasks by account
-                account_tasks = {}
-                for task_key, task in tasks.items():
-                    account_name = task['account_name']
-                    if account_name not in account_tasks:
-                        account_tasks[account_name] = []
-                    account_tasks[account_name].append(task)
-
-                # Process each account's tasks
-                for account_name, account_task_list in account_tasks.items():
-                    self._process_account_tasks(account_name, account_task_list)
-
-        except Exception as e:
-            print(f"❌ Keepalive check error: {e}")
-            import traceback
-            traceback.print_exc()
-
-        # Schedule next check
-        self._schedule_next_check()
-
-    def _process_account_tasks(self, account_name: str, tasks: list):
-        """Process keepalive tasks for a specific account"""
-        try:
-            # Get token directly from config sources
-            accounts = self.get_accounts_directly()
-            token = accounts.get(account_name)
-            if not token:
-                print(f"⚠️ No token found for account {account_name} in config")
-                return
-
-            manager = GitHubCodespacesManager(token)
-
-            for task in tasks:
-                self._process_single_task(manager, task)
-
-        except Exception as e:
-            print(f"❌ Error processing tasks for {account_name}: {e}")
-
-    def _process_single_task(self, manager: GitHubCodespacesManager, task: Dict):
-        """Process a single keepalive task"""
-        account_name = task['account_name']
-        cs_name = task['cs_name']
-        start_time = task['start_time']
-        keepalive_hours = task['keepalive_hours']
-
-        try:
-            # Calculate elapsed time
             current_time = datetime.now()
             time_str = current_time.strftime('%H:%M:%S')
-            elapsed_hours = (current_time - start_time).total_seconds() / 3600
-
-            print(f"  📊 [{time_str}] {account_name}_{cs_name}: {elapsed_hours:.1f}h/{keepalive_hours:.1f}h")
-
-            # Check if task has expired
-            if elapsed_hours >= keepalive_hours:
-                print(f"    ⏰ [{time_str}] Task expired, removing...")
-                KeepaliveStorage.remove_task(account_name, cs_name)
+            self._last_check = current_time
+            
+            # Load task (may have been deleted or updated)
+            task = KeepaliveStorage.get_task_by_key(task_key)
+            if not task:
+                print(f"  📭 [{time_str}] Task {task_key} not found, canceling timer")
+                self._cancel_task_timer(task_key)
                 return
+            
+            # Check if task expired
+            elapsed_hours = (current_time - task['start_time']).total_seconds() / 3600
+            if elapsed_hours >= task['keepalive_hours']:
+                print(f"  ⏰ [{time_str}] Task {task_key} expired ({elapsed_hours:.1f}h >= {task['keepalive_hours']:.1f}h)")
+                KeepaliveStorage.remove_task(task['account_name'], task['cs_name'])
+                self._cancel_task_timer(task_key)
+                return
+            
+            # Get manager
+            accounts = self.get_accounts_directly()
+            token = accounts.get(task['account_name'])
+            if not token:
+                print(f"  ⚠️ [{time_str}] No token found for account {task['account_name']}")
+                return
+            
+            manager = GitHubCodespacesManager(token)
+            
+            # Process the task
+            self._process_single_task(manager, task, task_key)
+            
+        except Exception as e:
+            print(f"  ❌ [{datetime.now().strftime('%H:%M:%S')}] Error checking task {task_key}: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Reschedule even on error (avoid losing the task)
+            try:
+                self._schedule_task(task_key)
+            except:
+                pass
 
+    def _process_single_task(self, manager: GitHubCodespacesManager, task: Dict, task_key: str):
+        """
+        Process a single keepalive task with new logic
+        
+        Core logic:
+        1. If codespace is Available (running): update last_used_at to current time, reschedule
+        2. If codespace is Stopped/Shutdown: start it, update last_used_at, reschedule
+        3. Other states: reschedule without updating last_used_at
+        """
+        from config import Config
+        
+        account_name = task['account_name']
+        cs_name = task['cs_name']
+        current_time = datetime.now()
+        time_str = current_time.strftime('%H:%M:%S')
+        buffer_seconds = Config.get_check_buffer_seconds()
+        
+        try:
             # Get codespace status
             cs = manager.get_codespace(cs_name)
             if not cs:
-                print(f"    ❌ [{time_str}] Codespace not found, removing task...")
+                print(f"    ❌ [{time_str}] Codespace {cs_name} not found, removing task")
                 KeepaliveStorage.remove_task(account_name, cs_name)
+                self._cancel_task_timer(task_key)
                 return
-
+            
             state = cs.get('state', 'Unknown')
-
-            # Restart if not running
-            if state in ["Stopped", "Shutdown"]:
-                print(f"    🔄 [{time_str}] Restarting codespace (state: {state})...")
-                manager.start_codespace(cs_name)
-                print(f"    ✅ [{time_str}] Codespace restarted successfully")
-            elif state == "Available":
-                print(f"    ✅ [{time_str}] Codespace is running")
+            
+            # Core logic based on state
+            if state == "Available":
+                # Codespace is running, update last_used_at to current time
+                print(f"    ✅ [{time_str}] {task_key}: Codespace is active (Available)")
+                
+                new_last_used_at = current_time
+                new_next_check_time = current_time + timedelta(seconds=buffer_seconds)
+                
+                # Update task storage
+                KeepaliveStorage.update_task_check_time(
+                    task_key=task_key,
+                    last_used_at=new_last_used_at,
+                    next_check_time=new_next_check_time
+                )
+                
+                print(f"       Updated last_used_at to {new_last_used_at.strftime('%H:%M:%S')}")
+                print(f"       Next check scheduled at {new_next_check_time.strftime('%H:%M:%S')}")
+                
+            elif state in ["Stopped", "Shutdown"]:
+                # Codespace stopped, start it
+                print(f"    🔄 [{time_str}] {task_key}: Codespace stopped ({state}), restarting...")
+                
+                try:
+                    manager.start_codespace(cs_name)
+                    print(f"       ✅ Codespace restarted successfully")
+                    
+                    # Update last_used_at to current time after restart
+                    new_last_used_at = current_time
+                    new_next_check_time = current_time + timedelta(seconds=buffer_seconds)
+                    
+                    # Update task storage
+                    KeepaliveStorage.update_task_check_time(
+                        task_key=task_key,
+                        last_used_at=new_last_used_at,
+                        next_check_time=new_next_check_time
+                    )
+                    
+                    print(f"       Updated last_used_at to {new_last_used_at.strftime('%H:%M:%S')}")
+                    print(f"       Next check scheduled at {new_next_check_time.strftime('%H:%M:%S')}")
+                    
+                except Exception as e:
+                    print(f"       ❌ Failed to restart codespace: {e}")
+                    # Even if restart fails, reschedule to retry later
+                    new_next_check_time = current_time + timedelta(seconds=buffer_seconds)
+                    KeepaliveStorage.update_task_check_time(
+                        task_key=task_key,
+                        last_used_at=current_time,
+                        next_check_time=new_next_check_time
+                    )
             else:
-                print(f"    ⏳ [{time_str}] Codespace state: {state}")
-
+                # Other states (Starting, Unavailable, etc.)
+                print(f"    ⏳ [{time_str}] {task_key}: Codespace state is {state}, waiting...")
+                
+                # Don't update last_used_at for other states, but reschedule
+                # Use existing next_check_time or calculate new one
+                existing_next_check = task.get('next_check_time')
+                if existing_next_check:
+                    if isinstance(existing_next_check, str):
+                        existing_next_check = datetime.fromisoformat(existing_next_check)
+                    if existing_next_check > current_time:
+                        new_next_check_time = existing_next_check
+                    else:
+                        # Expired, reschedule
+                        last_used = task.get('last_used_at') or task['start_time']
+                        if isinstance(last_used, str):
+                            last_used = datetime.fromisoformat(last_used)
+                        new_next_check_time = last_used + timedelta(seconds=buffer_seconds)
+                        if new_next_check_time < current_time:
+                            new_next_check_time = current_time + timedelta(seconds=buffer_seconds)
+                else:
+                    # Calculate new
+                    last_used = task.get('last_used_at') or task['start_time']
+                    if isinstance(last_used, str):
+                        last_used = datetime.fromisoformat(last_used)
+                    new_next_check_time = last_used + timedelta(seconds=buffer_seconds)
+                    if new_next_check_time < current_time:
+                        new_next_check_time = current_time + timedelta(seconds=buffer_seconds)
+                
+                KeepaliveStorage.update_task_check_time(
+                    task_key=task_key,
+                    last_used_at=task.get('last_used_at') or task['start_time'],
+                    next_check_time=new_next_check_time
+                )
+            
+            # Reschedule task
+            self._schedule_task(task_key)
+            
         except Exception as e:
-            print(f"    ❌ [{time_str}] Error processing task {account_name}_{cs_name}: {e}")
+            print(f"    ❌ [{time_str}] Error processing task {task_key}: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Reschedule even on error
+            try:
+                new_next_check_time = current_time + timedelta(seconds=buffer_seconds)
+                KeepaliveStorage.update_task_check_time(
+                    task_key=task_key,
+                    last_used_at=current_time,
+                    next_check_time=new_next_check_time
+                )
+                self._schedule_task(task_key)
+            except:
+                pass
 
     def get_status(self) -> Dict:
         """Get service status"""
         return {
             'running': self._running,
             'last_check': self._last_check,
+            'active_tasks': len(self._task_timers),
             'next_check_in': self._timer and self._timer.interval or None
         }
 
@@ -696,6 +853,8 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                                     # Remove keepalive task from both session and storage
                                     st.session_state.keepalive_tasks.pop(task_key, None)
                                     KeepaliveStorage.remove_task(account_name, cs_name)
+                                    # Cancel timer
+                                    keepalive_service._cancel_task_timer(task_key)
                                     st.success(f"✅ Stopped")
                                     time.sleep(1)
                                     st.rerun()
@@ -714,6 +873,8 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                             # Remove from both session and storage
                             st.session_state.keepalive_tasks.pop(task_key, None)
                             KeepaliveStorage.remove_task(account_name, cs_name)
+                            # Cancel timer
+                            keepalive_service._cancel_task_timer(task_key)
                             st.success("Keepalive stopped")
                             st.rerun()
             
@@ -738,13 +899,35 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                                     manager.start_codespace(cs_name)
                                     start_time = datetime.now()
                                     
+                                    # Get codespace info to get last_used_at
+                                    cs = manager.get_codespace(cs_name)
+                                    last_used_at_str = cs.get('last_used_at') if cs else None
+                                    
+                                    # Parse last_used_at or use current time
+                                    if last_used_at_str:
+                                        try:
+                                            last_used_at = datetime.fromisoformat(last_used_at_str.replace('Z', '+00:00'))
+                                            # Convert to local time if needed
+                                            if last_used_at.tzinfo:
+                                                last_used_at = last_used_at.replace(tzinfo=None)
+                                        except:
+                                            last_used_at = start_time
+                                    else:
+                                        last_used_at = start_time
+                                    
+                                    # Calculate next_check_time
+                                    buffer_seconds = Config.get_check_buffer_seconds()
+                                    next_check_time = last_used_at + timedelta(seconds=buffer_seconds)
+                                    
                                     # Add keepalive task to session state
                                     st.session_state.keepalive_tasks[task_key] = {
                                         'start_time': start_time,
                                         'keepalive_hours': keepalive_hours,
                                         'account_name': account_name,
                                         'cs_name': cs_name,
-                                        'created_by': st.session_state.authenticated_user
+                                        'created_by': st.session_state.authenticated_user,
+                                        'last_used_at': last_used_at,
+                                        'next_check_time': next_check_time
                                     }
 
                                     # Save to persistent storage
@@ -753,8 +936,13 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                                         cs_name=cs_name,
                                         start_time=start_time,
                                         keepalive_hours=keepalive_hours,
+                                        last_used_at=last_used_at,
+                                        next_check_time=next_check_time,
                                         created_by=st.session_state.authenticated_user
                                     )
+                                    
+                                    # Schedule the task in keepalive service
+                                    keepalive_service._schedule_task(task_key)
                                     
                                     st.session_state.show_keepalive_dialog[task_key] = False
                                     st.success(f"✅ Started with {keepalive_hours}h keepalive (saved)")
@@ -807,15 +995,17 @@ def display_all_codespaces():
             display_codespaces_for_account(account_name, manager)
 
     # Manual refresh controls
-    if active_keepalives > 0:
-        st.markdown("---")
-        col1, col2 = st.columns([3, 1])
-        with col1:
+    st.markdown("---")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if active_keepalives > 0:
             st.caption("💡 Keepalive is managed by backend service - no need to keep page open")
-        with col2:
-            if st.button("🔄 Refresh Status", use_container_width=True):
-                st.session_state.keepalive_tasks = KeepaliveStorage.load_tasks()
-                st.rerun()
+        else:
+            st.caption("💡 Refresh to load latest codespace status")
+    with col2:
+        if st.button("🔄 Refresh Status", use_container_width=True):
+            st.session_state.keepalive_tasks = KeepaliveStorage.load_tasks()
+            st.rerun()
 
 
 def display_create_codespace():

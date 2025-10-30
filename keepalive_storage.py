@@ -90,6 +90,11 @@ class KeepaliveStorage:
                     'created_by': task.get('created_by', 'unknown'),
                     'created_at': task['created_at'].isoformat() if hasattr(task['created_at'], 'isoformat') else task['created_at']
                 }
+                # Add new fields if present
+                if 'last_used_at' in task:
+                    serializable_tasks[key]['last_used_at'] = task['last_used_at'].isoformat() if hasattr(task['last_used_at'], 'isoformat') else task['last_used_at']
+                if 'next_check_time' in task:
+                    serializable_tasks[key]['next_check_time'] = task['next_check_time'].isoformat() if hasattr(task['next_check_time'], 'isoformat') else task['next_check_time']
 
             with open(KeepaliveStorage.STORAGE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(serializable_tasks, f, indent=2)
@@ -133,7 +138,7 @@ class KeepaliveStorage:
                 
                 # Only restore tasks that haven't expired
                 if elapsed_hours < keepalive_hours:
-                    tasks[key] = {
+                    task_dict = {
                         'account_name': task['account_name'],
                         'cs_name': task['cs_name'],
                         'start_time': start_time,
@@ -141,6 +146,12 @@ class KeepaliveStorage:
                         'created_by': task.get('created_by', 'unknown'),
                         'created_at': datetime.fromisoformat(task['created_at']) if 'created_at' in task else start_time
                     }
+                    # Restore new fields if present
+                    if 'last_used_at' in task:
+                        task_dict['last_used_at'] = datetime.fromisoformat(task['last_used_at']) if isinstance(task['last_used_at'], str) else task['last_used_at']
+                    if 'next_check_time' in task:
+                        task_dict['next_check_time'] = datetime.fromisoformat(task['next_check_time']) if isinstance(task['next_check_time'], str) else task['next_check_time']
+                    tasks[key] = task_dict
             
             return tasks
         except Exception as e:
@@ -148,7 +159,8 @@ class KeepaliveStorage:
             return {}
     
     @staticmethod
-    def add_task(account_name: str, cs_name: str, start_time: datetime, keepalive_hours: float, created_by: str = None) -> bool:
+    def add_task(account_name: str, cs_name: str, start_time: datetime, keepalive_hours: float, 
+                 last_used_at: datetime = None, next_check_time: datetime = None, created_by: str = None) -> bool:
         """
         Add a new keepalive task
 
@@ -157,13 +169,27 @@ class KeepaliveStorage:
             cs_name: Codespace name
             start_time: Start time
             keepalive_hours: Keepalive duration in hours
+            last_used_at: Last used time (defaults to start_time if not provided)
+            next_check_time: Next check time (calculated if not provided)
             created_by: User who created this task
 
         Returns:
             True if successful
         """
+        from config import Config
+        from datetime import timedelta
+        
         tasks = KeepaliveStorage.load_tasks()
         task_key = f"{account_name}_{cs_name}"
+
+        # Use start_time if last_used_at not provided
+        if not last_used_at:
+            last_used_at = start_time
+        
+        # Calculate next_check_time if not provided
+        if not next_check_time:
+            buffer_seconds = Config.get_check_buffer_seconds()
+            next_check_time = last_used_at + timedelta(seconds=buffer_seconds)
 
         tasks[task_key] = {
             'account_name': account_name,
@@ -171,7 +197,9 @@ class KeepaliveStorage:
             'start_time': start_time,
             'keepalive_hours': keepalive_hours,
             'created_by': created_by or 'unknown',
-            'created_at': datetime.now()
+            'created_at': datetime.now(),
+            'last_used_at': last_used_at,
+            'next_check_time': next_check_time
         }
 
         return KeepaliveStorage.save_tasks(tasks)
@@ -265,4 +293,41 @@ class KeepaliveStorage:
             Dictionary of all active tasks
         """
         return KeepaliveStorage.load_tasks()
+    
+    @staticmethod
+    def get_task_by_key(task_key: str) -> Optional[Dict]:
+        """
+        Get task by task key
+        
+        Args:
+            task_key: Task key (account_name_cs_name)
+        
+        Returns:
+            Task dictionary or None
+        """
+        tasks = KeepaliveStorage.load_tasks()
+        return tasks.get(task_key)
+    
+    @staticmethod
+    def update_task_check_time(task_key: str, last_used_at: datetime, next_check_time: datetime) -> bool:
+        """
+        Update task check time information
+        
+        Args:
+            task_key: Task key (account_name_cs_name)
+            last_used_at: New last_used_at time
+            next_check_time: New next_check_time
+        
+        Returns:
+            True if successful
+        """
+        tasks = KeepaliveStorage.load_tasks()
+        
+        if task_key not in tasks:
+            return False
+        
+        tasks[task_key]['last_used_at'] = last_used_at
+        tasks[task_key]['next_check_time'] = next_check_time
+        
+        return KeepaliveStorage.save_tasks(tasks)
 

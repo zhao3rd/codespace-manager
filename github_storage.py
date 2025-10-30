@@ -86,6 +86,15 @@ class GitHubStorage:
                         'start_time': task['start_time'].isoformat(),
                         'keepalive_hours': task['keepalive_hours']
                     }
+                    # Add new fields if present
+                    if 'last_used_at' in task:
+                        serializable_tasks[key]['last_used_at'] = task['last_used_at'].isoformat() if hasattr(task['last_used_at'], 'isoformat') else task['last_used_at']
+                    if 'next_check_time' in task:
+                        serializable_tasks[key]['next_check_time'] = task['next_check_time'].isoformat() if hasattr(task['next_check_time'], 'isoformat') else task['next_check_time']
+                    if 'created_by' in task:
+                        serializable_tasks[key]['created_by'] = task['created_by']
+                    if 'created_at' in task:
+                        serializable_tasks[key]['created_at'] = task['created_at'].isoformat() if hasattr(task['created_at'], 'isoformat') else task['created_at']
                 
                 # Get current file SHA and content if exists
                 sha = self._get_file_sha()
@@ -103,6 +112,15 @@ class GitHubStorage:
                                 'start_time': task['start_time'].isoformat(),
                                 'keepalive_hours': task['keepalive_hours']
                             }
+                            # Preserve new fields from remote
+                            if 'last_used_at' in task:
+                                merged_data[key]['last_used_at'] = task['last_used_at'].isoformat() if hasattr(task['last_used_at'], 'isoformat') else task['last_used_at']
+                            if 'next_check_time' in task:
+                                merged_data[key]['next_check_time'] = task['next_check_time'].isoformat() if hasattr(task['next_check_time'], 'isoformat') else task['next_check_time']
+                            if 'created_by' in task:
+                                merged_data[key]['created_by'] = task['created_by']
+                            if 'created_at' in task:
+                                merged_data[key]['created_at'] = task['created_at'].isoformat() if hasattr(task['created_at'], 'isoformat') else task['created_at']
                         # Local tasks override remote
                         merged_data.update(serializable_tasks)
                         serializable_tasks = merged_data
@@ -200,12 +218,22 @@ class GitHubStorage:
                 
                 # Only restore tasks that haven't expired
                 if elapsed_hours < keepalive_hours:
-                    tasks[key] = {
+                    task_dict = {
                         'account_name': task['account_name'],
                         'cs_name': task['cs_name'],
                         'start_time': start_time,
                         'keepalive_hours': keepalive_hours
                     }
+                    # Restore new fields if present
+                    if 'last_used_at' in task:
+                        task_dict['last_used_at'] = datetime.fromisoformat(task['last_used_at']) if isinstance(task['last_used_at'], str) else task['last_used_at']
+                    if 'next_check_time' in task:
+                        task_dict['next_check_time'] = datetime.fromisoformat(task['next_check_time']) if isinstance(task['next_check_time'], str) else task['next_check_time']
+                    if 'created_by' in task:
+                        task_dict['created_by'] = task['created_by']
+                    if 'created_at' in task:
+                        task_dict['created_at'] = datetime.fromisoformat(task['created_at']) if isinstance(task['created_at'], str) else task['created_at']
+                    tasks[key] = task_dict
             
             return tasks
             
