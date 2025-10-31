@@ -872,14 +872,19 @@ def display_sidebar():
 
         # Storage sync status
         st.caption("**Storage:**")
-        if KeepaliveStorage._is_github_sync_enabled():
-            st.success("🔄 GitHub Sync Enabled")
-            st.caption("• Local-first storage")
-            st.caption("• Background sync to GitHub")
-        else:
+        try:
+            if hasattr(KeepaliveStorage, '_is_github_sync_enabled') and KeepaliveStorage._is_github_sync_enabled():
+                st.success("🔄 GitHub Sync Enabled")
+                st.caption("• Local-first storage")
+                st.caption("• Background sync to GitHub")
+            else:
+                st.info("📁 Local Storage Only")
+                st.caption("• Local file storage")
+                st.caption("• No GitHub sync configured")
+        except Exception as e:
             st.info("📁 Local Storage Only")
             st.caption("• Local file storage")
-            st.caption("• No GitHub sync configured")
+            st.caption("• Storage status unavailable")
 
         # Logout button
         st.divider()
