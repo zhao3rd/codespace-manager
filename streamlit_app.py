@@ -49,6 +49,11 @@ class KeepaliveService:
         self._task_timers: Dict[str, threading.Timer] = {}  # Per-task timers
         self._running = False  # 新实例默认为未运行状态
         self._last_check = None
+
+        # 循环保护机制
+        self._task_loop_counts = {}  # 记录每个任务的循环次数
+        self._task_loop_start_times = {}  # 记录每个任务的循环开始时间
+
         self._log("🔧 KeepaliveService initialized")
 
     def _check_service_running(self):
@@ -314,20 +319,16 @@ class KeepaliveService:
 
     def _process_single_task(self, manager: GitHubCodespacesManager, task: Dict, task_key: str):
         """
-        Process a single keepalive task.
-
+        Process a single keepalive task using unified logic.
         Strategy:
-        - Always log current state when the task fires.
-        - If the codespace is not Available, trigger a restart immediately.
-        - After attempting the restart, wait 60 seconds and log the new state.
-        - Update keepalive timings and reschedule the next check.
+        - Ignore current state, always send start signal
+        - Schedule 10-second status check
+        - Available → normal scheduling, Non-available → continue unified logic
         """
-
         account_name = task['account_name']
         cs_name = task['cs_name']
-        buffer_seconds = Config.get_check_buffer_seconds()
-        pre_check_time = datetime.now()
 
+        # Check if codespace exists
         try:
             cs = manager.get_codespace(cs_name)
             if not cs:
@@ -335,84 +336,192 @@ class KeepaliveService:
                 KeepaliveStorage.remove_task(account_name, cs_name)
                 self._cancel_task_timer(task_key)
                 return
+        except Exception as e:
+            self._log(f"    ❌ Error checking codespace {cs_name}: {e}")
+            # Schedule retry and continue
+            self._schedule_next_check(task_key, 10)
+            return
 
-            state = cs.get('state', 'Unknown')
-            self._log(f"    ℹ️ {task_key}: Current state - {state}")
+        # Execute unified keepalive logic
+        self._execute_unified_logic(manager, task, task_key)
 
-            api_last_used = self._parse_timestamp(cs.get('last_used_at'))
+    def _execute_unified_logic(self, manager: GitHubCodespacesManager, task: Dict, task_key: str):
+        """Execute unified keepalive logic: send start signal, schedule status check"""
+        cs_name = task['cs_name']
 
-            # 检查transitional状态
-            transitional_states = {"ShuttingDown", "Stopping", "Starting", "Queued", "Provisioning"}
-            if state in transitional_states:
-                self._log(f"    ⏳ {task_key}: Transitional state ({state}), scheduling normal check")
-                # 不发送restart API，直接用查询到的last_used_at + 1818秒调度
-                new_last_used_at = api_last_used or pre_check_time
-                new_next_check_time = new_last_used_at + timedelta(seconds=buffer_seconds)
+        # Check loop protection
+        if self._check_loop_protection(task_key):
+            self._log(f"    ⛔ {task_key}: Loop protection triggered, exiting unified logic")
+            self._return_to_normal_scheduling(task_key, None)  # Force normal scheduling
+            return
 
-                KeepaliveStorage.update_task_check_time(
-                    task_key=task_key,
-                    last_used_at=new_last_used_at,
-                    next_check_time=new_next_check_time
-                )
-                self._log(f"       Next check scheduled at {new_next_check_time.strftime('%Y-%m-%d %H:%M:%S')}")
-                self._schedule_task(task_key)
+        # Update loop tracking
+        self._update_loop_tracking(task_key)
+
+        # Step 1: Send start signal (ignore current state)
+        self._send_start_signal(manager, cs_name, task_key)
+
+        # Step 2: Schedule 10-second status check
+        self._schedule_status_check(task_key, 10)
+
+    def _check_loop_protection(self, task_key: str) -> bool:
+        """Check if loop protection should trigger"""
+        # Protection 1: Maximum loop count
+        max_loops = 50
+        if self._task_loop_counts.get(task_key, 0) >= max_loops:
+            self._log(f"    ⚠️ {task_key}: Max loop count ({max_loops}) reached")
+            return True
+
+        # Protection 2: Maximum time in loop
+        max_time_minutes = 30
+        start_time = self._task_loop_start_times.get(task_key)
+        if start_time and (datetime.now() - start_time).total_seconds() > max_time_minutes * 60:
+            self._log(f"    ⚠️ {task_key}: Max loop time ({max_time_minutes}min) reached")
+            return True
+
+        return False
+
+    def _update_loop_tracking(self, task_key: str):
+        """Update loop tracking information"""
+        # Initialize loop tracking if needed
+        if task_key not in self._task_loop_counts:
+            self._task_loop_counts[task_key] = 0
+            self._task_loop_start_times[task_key] = datetime.now()
+
+        # Increment loop count
+        self._task_loop_counts[task_key] += 1
+
+        # Log loop progress
+        count = self._task_loop_counts[task_key]
+        if count % 10 == 0:  # Log every 10 iterations
+            duration = datetime.now() - self._task_loop_start_times[task_key]
+            self._log(f"    🔄 {task_key}: Loop iteration {count}, duration: {duration.total_seconds():.0f}s")
+
+    def _reset_loop_tracking(self, task_key: str):
+        """Reset loop tracking when exiting unified logic"""
+        if task_key in self._task_loop_counts:
+            count = self._task_loop_counts[task_key]
+            duration = datetime.now() - self._task_loop_start_times[task_key]
+            self._log(f"    ✅ {task_key}: Exited unified logic after {count} iterations, {duration.total_seconds():.0f}s total")
+
+            del self._task_loop_counts[task_key]
+            del self._task_loop_start_times[task_key]
+
+    def _send_start_signal(self, manager: GitHubCodespacesManager, cs_name: str, task_key: str):
+        """Send start signal regardless of current state"""
+        try:
+            manager.start_codespace(cs_name)
+            self._log(f"    🚀 {task_key}: Start signal sent")
+        except Exception as e:
+            self._log(f"    ⚠️ {task_key}: Start signal failed: {e}")
+
+    def _schedule_status_check(self, task_key: str, delay_seconds: int):
+        """Schedule status check after specified delay"""
+        try:
+            timer = threading.Timer(delay_seconds, self._check_status_and_reschedule, args=(task_key,))
+            timer.start()
+            self._log(f"    ⏰ {task_key}: Status check scheduled in {delay_seconds}s")
+        except Exception as e:
+            self._log(f"    ❌ {task_key}: Failed to schedule status check: {e}")
+
+    def _check_status_and_reschedule(self, task_key: str):
+        """Check status after delay and decide next scheduling"""
+        try:
+            # Get task and manager
+            task = KeepaliveStorage.get_task_by_key(task_key)
+            if not task:
+                self._log(f"    📭 {task_key}: Task not found during status check")
                 return
 
-            restart_needed = state != "Available"
+            accounts = self.get_accounts_directly()
+            token = accounts.get(task['account_name'])
+            if not token:
+                self._log(f"    ⚠️ {task_key}: No token found for account {task['account_name']}")
+                return
 
-            if restart_needed:
-                try:
-                    self._log(f"    🚀 {task_key}: Initiating restart...")
-                    manager.start_codespace(cs_name)
-                    self._log(f"    ✅ {task_key}: Restart request sent")
-                except Exception as e:
-                    self._log(f"    ❌ {task_key}: Restart failed: {e}")
-                    fallback_next = datetime.now() + timedelta(seconds=10)
-                    base_last_used = api_last_used or task.get('last_used_at') or pre_check_time
-                    KeepaliveStorage.update_task_check_time(
-                        task_key=task_key,
-                        last_used_at=base_last_used if isinstance(base_last_used, datetime) else pre_check_time,
-                        next_check_time=fallback_next
-                    )
-                    self._log(f"       Next check scheduled at {fallback_next.strftime('%Y-%m-%d %H:%M:%S')} (10s retry)")
-                    self._schedule_task(task_key)
-                    return
+            manager = GitHubCodespacesManager(token)
+            cs_name = task['cs_name']
 
-                # 移除状态等待检查，直接进行成功后的调度
-                new_last_used_at = api_last_used or pre_check_time
+            # Check current state
+            cs = manager.get_codespace(cs_name)
+            if not cs:
+                self._log(f"    ❌ {task_key}: Codespace disappeared during status check")
+                return
+
+            state = cs.get('state', 'Unknown')
+            self._log(f"    🔍 {task_key}: Status check result - {state}")
+
+            if state == "Available":
+                # Exit unified logic, return to normal scheduling
+                self._return_to_normal_scheduling(task_key, cs)
             else:
-                self._log(f"    ✅ {task_key}: Codespace already running")
-                new_last_used_at = api_last_used or pre_check_time
+                # Continue unified logic (restart the cycle)
+                self._log(f"    🔄 {task_key}: State not Available, continuing unified logic")
+                self._execute_unified_logic(manager, task, task_key)
 
-            new_next_check_time = new_last_used_at + timedelta(seconds=buffer_seconds)
+        except Exception as e:
+            self._log(f"    ❌ {task_key}: Status check failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue unified logic even on error
+            task = KeepaliveStorage.get_task_by_key(task_key)
+            if task:
+                self._execute_unified_logic(manager, task, task_key)
+
+    def _return_to_normal_scheduling(self, task_key: str, cs):
+        """Return to normal 1818-second scheduling"""
+        # Reset loop tracking when exiting unified logic
+        self._reset_loop_tracking(task_key)
+
+        buffer_seconds = Config.get_check_buffer_seconds()
+
+        if cs:
+            # Use real codespace data if available
+            api_last_used = self._parse_timestamp(cs.get('last_used_at'))
+            last_used_at = api_last_used or datetime.now()
+            next_check_time = last_used_at + timedelta(seconds=buffer_seconds)
 
             KeepaliveStorage.update_task_check_time(
                 task_key=task_key,
-                last_used_at=new_last_used_at,
-                next_check_time=new_next_check_time
+                last_used_at=last_used_at,
+                next_check_time=next_check_time
             )
 
-            self._log(f"       Next check scheduled at {new_next_check_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            self._log(f"    ✅ {task_key}: Available state, returning to normal scheduling")
+            self._log(f"       Next normal check at {next_check_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            # Fallback when cs is None (e.g., loop protection triggered)
+            next_check_time = datetime.now() + timedelta(seconds=buffer_seconds)
 
-            self._schedule_task(task_key)
+            KeepaliveStorage.update_task_check_time(
+                task_key=task_key,
+                last_used_at=datetime.now(),
+                next_check_time=next_check_time
+            )
 
+            self._log(f"    ✅ {task_key}: Forced return to normal scheduling")
+            self._log(f"       Next normal check at {next_check_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        self._schedule_task(task_key)
+
+    def _schedule_next_check(self, task_key: str, delay_seconds: int):
+        """Unified next check scheduling method"""
+        try:
+            next_check = datetime.now() + timedelta(seconds=delay_seconds)
+
+            KeepaliveStorage.update_task_check_time(
+                task_key=task_key,
+                last_used_at=datetime.now(),
+                next_check_time=next_check
+            )
+
+            # Schedule timer
+            timer = threading.Timer(delay_seconds, self._perform_keepalive_check, args=(task_key,))
+            timer.start()
+
+            self._log(f"       Next check scheduled in {delay_seconds}s at {next_check.strftime('%Y-%m-%d %H:%M:%S')}")
         except Exception as e:
-            self._log(f"    ❌ Error processing task {task_key}: {e}")
-            import traceback
-            traceback.print_exc()
-
-            try:
-                now_time = datetime.now()
-                fallback_time = now_time + timedelta(seconds=10)  # 统一使用10秒重试
-                KeepaliveStorage.update_task_check_time(
-                    task_key=task_key,
-                    last_used_at=now_time,
-                    next_check_time=fallback_time
-                )
-                self._log(f"       Fallback next check scheduled at {fallback_time.strftime('%Y-%m-%d %H:%M:%S')} (10s retry)")
-                self._schedule_task(task_key)
-            except Exception:
-                pass
+            self._log(f"    ❌ {task_key}: Failed to schedule next check: {e}")
 
     def get_status(self) -> Dict:
         """Get service status"""
