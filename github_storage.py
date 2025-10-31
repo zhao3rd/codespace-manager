@@ -10,12 +10,12 @@ from datetime import datetime
 
 
 class GitHubStorage:
-    """Store keepalive tasks in GitHub repository"""
-    
+    """Store keepalive tasks in GitHub repository with optimized API usage"""
+
     def __init__(self, token: str, repo: str, branch: str = "main"):
         """
         Initialize GitHub storage
-        
+
         Args:
             token: GitHub Personal Access Token
             repo: Repository in format "owner/repo"
@@ -31,19 +31,34 @@ class GitHubStorage:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28"
         }
-        self.max_retries = 3  # Maximum retry attempts for conflict resolution
+        self.max_retries = 2  # Reduced retry attempts for faster failure
+        self._last_known_sha = None  # Cache SHA to reduce API calls
     
-    def _get_file_sha(self) -> Optional[str]:
-        """Get current file SHA for updates"""
+    def _get_file_sha(self, force_refresh: bool = False) -> Optional[str]:
+        """Get current file SHA for updates with caching"""
+        # Use cached SHA if available and not forcing refresh
+        if not force_refresh and self._last_known_sha:
+            return self._last_known_sha
+
         url = f"{self.base_url}/repos/{self.repo}/contents/{self.file_path}"
         params = {"ref": self.branch}
-        
+
         try:
-            response = requests.get(url, headers=self.headers, params=params)
+            response = requests.get(url, headers=self.headers, params=params, timeout=10)
             if response.status_code == 200:
-                return response.json().get("sha")
-            return None
+                sha = response.json().get("sha")
+                self._last_known_sha = sha  # Cache the SHA
+                return sha
+            elif response.status_code == 404:
+                # File doesn't exist, clear cache
+                self._last_known_sha = None
+                return None
+            else:
+                # Error occurred, clear cache to force refresh next time
+                self._last_known_sha = None
+                return None
         except Exception:
+            self._last_known_sha = None
             return None
     
     def _merge_tasks(self, remote_tasks: Dict, local_tasks: Dict) -> Dict:
@@ -96,34 +111,8 @@ class GitHubStorage:
                     if 'created_at' in task:
                         serializable_tasks[key]['created_at'] = task['created_at'].isoformat() if hasattr(task['created_at'], 'isoformat') else task['created_at']
                 
-                # Get current file SHA and content if exists
-                sha = self._get_file_sha()
-                
-                # If this is a retry, merge with remote data
-                if attempt > 0 and sha:
-                    remote_tasks = self.load_tasks()
-                    if remote_tasks:
-                        # Merge remote and local tasks
-                        merged_data = {}
-                        for key, task in remote_tasks.items():
-                            merged_data[key] = {
-                                'account_name': task['account_name'],
-                                'cs_name': task['cs_name'],
-                                'start_time': task['start_time'].isoformat(),
-                                'keepalive_hours': task['keepalive_hours']
-                            }
-                            # Preserve new fields from remote
-                            if 'last_used_at' in task:
-                                merged_data[key]['last_used_at'] = task['last_used_at'].isoformat() if hasattr(task['last_used_at'], 'isoformat') else task['last_used_at']
-                            if 'next_check_time' in task:
-                                merged_data[key]['next_check_time'] = task['next_check_time'].isoformat() if hasattr(task['next_check_time'], 'isoformat') else task['next_check_time']
-                            if 'created_by' in task:
-                                merged_data[key]['created_by'] = task['created_by']
-                            if 'created_at' in task:
-                                merged_data[key]['created_at'] = task['created_at'].isoformat() if hasattr(task['created_at'], 'isoformat') else task['created_at']
-                        # Local tasks override remote
-                        merged_data.update(serializable_tasks)
-                        serializable_tasks = merged_data
+                # Get current file SHA (use cache on first attempt, force refresh on retry)
+                sha = self._get_file_sha(force_refresh=(attempt > 0))
                 
                 # Convert to JSON and encode to base64
                 content = json.dumps(serializable_tasks, indent=2)
@@ -145,14 +134,22 @@ class GitHubStorage:
                     data["sha"] = sha
                 
                 # Create or update file (GitHub API auto-creates directories)
-                response = requests.put(url, headers=self.headers, json=data)
-                
+                response = requests.put(url, headers=self.headers, json=data, timeout=10)
+
                 if response.status_code in [200, 201]:
+                    # Update cached SHA on success
+                    if response.status_code == 200:
+                        self._last_known_sha = response.json().get("sha")
                     print(f"✅ GitHub storage: Successfully saved {task_count} tasks")
                     return True
                 elif response.status_code == 409:
                     # Conflict: file was modified by someone else, retry
                     print(f"⚠️ GitHub storage: Conflict detected on attempt {attempt + 1}, retrying...")
+                    # Force refresh SHA on next attempt
+                    self._last_known_sha = None
+                    # Brief delay before retry
+                    import time
+                    time.sleep(0.5)
                     continue
                 else:
                     error_msg = f"GitHub API error {response.status_code}"
@@ -162,21 +159,19 @@ class GitHubStorage:
                             error_msg += f": {error_detail['message']}"
                     except:
                         error_msg += f": {response.text[:200]}"
-                    
+
                     print(f"❌ GitHub storage: {error_msg}")
-                    print(f"   URL: {url}")
-                    print(f"   Repo: {self.repo}")
-                    print(f"   Branch: {self.branch}")
-                    print(f"   File: {self.file_path}")
+                    # Clear cache on error
+                    self._last_known_sha = None
                     return False
                     
             except Exception as e:
                 print(f"❌ GitHub storage: Error on attempt {attempt + 1}: {type(e).__name__}: {e}")
-                import traceback
-                traceback.print_exc()
+                # Clear cache on exception
+                self._last_known_sha = None
                 if attempt == self.max_retries - 1:
                     return False
-        
+
         print(f"❌ GitHub storage: Failed to save after {self.max_retries} attempts")
         return False
     

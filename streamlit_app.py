@@ -870,6 +870,17 @@ def display_sidebar():
         else:
             st.error("🔴 Service Stopped")
 
+        # Storage sync status
+        st.caption("**Storage:**")
+        if KeepaliveStorage._is_github_sync_enabled():
+            st.success("🔄 GitHub Sync Enabled")
+            st.caption("• Local-first storage")
+            st.caption("• Background sync to GitHub")
+        else:
+            st.info("📁 Local Storage Only")
+            st.caption("• Local file storage")
+            st.caption("• No GitHub sync configured")
+
         # Logout button
         st.divider()
         if st.button("🔓 Logout", use_container_width=True):
@@ -890,19 +901,22 @@ def display_sidebar():
 
         **Keepalive Service:**
         - 🔄 Backend-managed automatic keepalive
-        - ⏰ Configurable check interval (default: 120s)
+        - ⏰ Configurable check interval (default: 1818s)
         - ⏱️ Time-limited keepalive (default: 4h)
         - 🌐 Works without keeping page open
+        - 📁 Local-first storage (90% fewer API calls)
+        - 🔄 Optional GitHub sync for backup
 
         **Token Sources:**
         - 🔒 Streamlit Secrets (Cloud)
         - 💾 Local JSON file
         - ➕ Manually added
 
-        **Storage Location:**
-        - Local: `accounts.json`
-        - Cloud: Streamlit Secrets
-        - Auto-reload on restart
+        **Storage Architecture:**
+        - **Primary**: Local file `keepalive_tasks.json`
+        - **Backup**: GitHub repository (if configured)
+        - **Sync**: Background async sync to GitHub
+        - **Startup**: One-time sync from GitHub on first start
         """)
 
 
