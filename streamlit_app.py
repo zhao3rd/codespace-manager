@@ -18,24 +18,82 @@ class KeepaliveService:
 
     _instance = None
     _lock = threading.Lock()
+    _status_file = "keepalive_service_status.json"
 
     def __new__(cls):
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super(KeepaliveService, cls).__new__(cls)
-                cls._instance._initialized = False
-            return cls._instance
+        # 由于 Streamlit 重新执行会重置类变量，我们无法使用传统单例模式
+        # 直接创建实例，状态管理通过外部文件实现
+        return super(KeepaliveService, cls).__new__(cls)
 
     def __init__(self):
-        if self._initialized:
+        # 首先检查是否已经初始化过
+        if hasattr(self, '_initialized') and self._initialized:
+            self._log("⏭️ Service already initialized, skipping")
             return
 
+        # 检查外部状态文件来判断服务是否已运行
+        if self._check_service_running():
+            self._log("♻️ Service already running (detected from status file)")
+            self._running = True
+            self._initialized = True
+            # 初始化必要的属性，避免后续访问错误
+            self._timer = None
+            self._task_timers: Dict[str, threading.Timer] = {}
+            self._last_check = None
+            return
+
+        self._log("🆕 Creating new KeepaliveService instance")
         self._initialized = True
+
         self._timer = None  # Kept for backward compatibility
         self._task_timers: Dict[str, threading.Timer] = {}  # Per-task timers
-        self._running = False
+        self._running = False  # 新实例默认为未运行状态
         self._last_check = None
         self._log("🔧 KeepaliveService initialized")
+
+    def _check_service_running(self):
+        """通过PID检查服务是否已运行（简化方案）"""
+        try:
+            import os
+            import json
+
+            if os.path.exists(self._status_file):
+                with open(self._status_file, 'r') as f:
+                    status = json.load(f)
+
+                # 关键检查：PID是否匹配
+                saved_pid = status.get('pid')
+                current_pid = os.getpid()
+
+                if saved_pid == current_pid:
+                    self._log(f"♻️ Service running (PID {current_pid} matches)")
+                    return True
+                else:
+                    self._log(f"🔄 Different PID detected (file: {saved_pid}, current: {current_pid})")
+                    return False
+            return False
+        except Exception as e:
+            self._log(f"⚠️ Error checking service status: {e}")
+            return False
+
+    def _update_service_status(self):
+        """更新服务状态文件（包含PID）"""
+        try:
+            import json
+            import os
+            from datetime import datetime
+
+            status = {
+                'running': self._running,
+                'pid': os.getpid(),  # 关键：保存当前进程ID
+                'last_check': datetime.now().isoformat(),
+                'active_tasks': len(self._task_timers)
+            }
+
+            with open(self._status_file, 'w') as f:
+                json.dump(status, f, indent=2)
+        except Exception as e:
+            self._log(f"⚠️ Failed to update service status: {e}")
 
     def _log(self, message: str):
         """Print log message with timestamp."""
@@ -82,23 +140,37 @@ class KeepaliveService:
 
         self._running = True
         self._log("🚀 KeepaliveService started")
+        self._update_service_status()  # 更新状态文件
         self._initialize_existing_tasks()
 
     def stop(self):
         """Stop the keepalive service"""
         self._running = False
-        
+
         # Cancel old timer
         if self._timer:
             self._timer.cancel()
             self._timer = None
-        
+
         # Cancel all task timers
         for task_key, timer in list(self._task_timers.items()):
             timer.cancel()
         self._task_timers.clear()
-        
+
+        # 清理状态文件
+        self._cleanup_status_file()
+
         self._log("🛑 KeepaliveService stopped")
+
+    def _cleanup_status_file(self):
+        """清理状态文件"""
+        try:
+            import os
+            if os.path.exists(self._status_file):
+                os.remove(self._status_file)
+                self._log(f"🗑️ Removed status file {self._status_file}")
+        except Exception as e:
+            self._log(f"⚠️ Failed to remove status file: {e}")
 
     def _initialize_existing_tasks(self):
         """Initialize existing keepalive tasks when service starts"""
@@ -200,6 +272,7 @@ class KeepaliveService:
         try:
             current_time = datetime.now()
             self._last_check = current_time
+            self._update_service_status()  # 定期更新状态文件
             
             # Load task (may have been deleted or updated)
             task = KeepaliveStorage.get_task_by_key(task_key)
@@ -268,30 +341,45 @@ class KeepaliveService:
 
             api_last_used = self._parse_timestamp(cs.get('last_used_at'))
 
-            restart_attempted = state != "Available"
+            # 检查transitional状态
+            transitional_states = {"ShuttingDown", "Stopping", "Starting", "Queued", "Provisioning"}
+            if state in transitional_states:
+                self._log(f"    ⏳ {task_key}: Transitional state ({state}), scheduling normal check")
+                # 不发送restart API，直接用查询到的last_used_at + 1818秒调度
+                new_last_used_at = api_last_used or pre_check_time
+                new_next_check_time = new_last_used_at + timedelta(seconds=buffer_seconds)
 
-            if restart_attempted:
+                KeepaliveStorage.update_task_check_time(
+                    task_key=task_key,
+                    last_used_at=new_last_used_at,
+                    next_check_time=new_next_check_time
+                )
+                self._log(f"       Next check scheduled at {new_next_check_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                self._schedule_task(task_key)
+                return
+
+            restart_needed = state != "Available"
+
+            if restart_needed:
                 try:
                     self._log(f"    🚀 {task_key}: Initiating restart...")
                     manager.start_codespace(cs_name)
                     self._log(f"    ✅ {task_key}: Restart request sent")
                 except Exception as e:
                     self._log(f"    ❌ {task_key}: Restart failed: {e}")
+                    fallback_next = datetime.now() + timedelta(seconds=10)
+                    base_last_used = api_last_used or task.get('last_used_at') or pre_check_time
+                    KeepaliveStorage.update_task_check_time(
+                        task_key=task_key,
+                        last_used_at=base_last_used if isinstance(base_last_used, datetime) else pre_check_time,
+                        next_check_time=fallback_next
+                    )
+                    self._log(f"       Next check scheduled at {fallback_next.strftime('%Y-%m-%d %H:%M:%S')} (10s retry)")
+                    self._schedule_task(task_key)
+                    return
 
-                # Wait 30 seconds before checking status again
-                time.sleep(30)
-
-                post_check_time = datetime.now()
-                try:
-                    cs_after = manager.get_codespace(cs_name)
-                    post_state = cs_after.get('state', 'Unknown') if cs_after else 'Unknown'
-                    self._log(f"    ℹ️ {task_key}: State after restart - {post_state}")
-                    api_last_used = self._parse_timestamp(cs_after.get('last_used_at')) if cs_after else api_last_used
-                except Exception as e:
-                    self._log(f"    ⚠️ {task_key}: Unable to fetch state after restart: {e}")
-                    # Keep previous api_last_used if available
-
-                new_last_used_at = api_last_used or post_check_time
+                # 移除状态等待检查，直接进行成功后的调度
+                new_last_used_at = api_last_used or pre_check_time
             else:
                 self._log(f"    ✅ {task_key}: Codespace already running")
                 new_last_used_at = api_last_used or pre_check_time
@@ -314,13 +402,14 @@ class KeepaliveService:
             traceback.print_exc()
 
             try:
-                fallback_time = datetime.now() + timedelta(seconds=buffer_seconds)
                 now_time = datetime.now()
+                fallback_time = now_time + timedelta(seconds=10)  # 统一使用10秒重试
                 KeepaliveStorage.update_task_check_time(
                     task_key=task_key,
                     last_used_at=now_time,
                     next_check_time=fallback_time
                 )
+                self._log(f"       Fallback next check scheduled at {fallback_time.strftime('%Y-%m-%d %H:%M:%S')} (10s retry)")
                 self._schedule_task(task_key)
             except Exception:
                 pass
@@ -335,13 +424,15 @@ class KeepaliveService:
         }
 
 
-# Global keepalive service instance
+# Global keepalive service instance - 真正的进程级单例
 keepalive_service = KeepaliveService()
 
 # Start keepalive service globally (independent of user sessions)
-keepalive_service._log("🚀 Starting global keepalive service...")
-keepalive_service.start()
-keepalive_service._log("✅ Global keepalive service started")
+# Only start if not already running to avoid repeated initialization logs on page refresh
+if not keepalive_service._running:
+    keepalive_service._log("🚀 Starting global keepalive service...")
+    keepalive_service.start()
+    keepalive_service._log("✅ Global keepalive service started")
 
 
 # Page configuration

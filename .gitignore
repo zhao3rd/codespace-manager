@@ -57,3 +57,4 @@ Thumbs.db
 *.log
 # conda
 .conda/
+keepalive_service_status.json
