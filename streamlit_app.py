@@ -44,6 +44,9 @@ class KeepaliveService:
             self._timer = None
             self._task_timers: Dict[str, threading.Timer] = {}
             self._last_check = None
+            # 循环保护机制 - 即使服务已运行也要初始化这些属性
+            self._task_loop_counts = {}
+            self._task_loop_start_times = {}
             return
 
         self._log("🆕 Creating new KeepaliveService instance")
