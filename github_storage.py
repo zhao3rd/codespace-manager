@@ -1,12 +1,14 @@
 """
 GitHub-based Persistent Storage for Keepalive Tasks
 Uses GitHub API to store data in a private repository
+All time handling uses Beijing Timezone (UTC+8)
 """
 import requests
 import json
 import base64
 from typing import Dict, Optional
 from datetime import datetime
+from timezone_utils import get_beijing_time, format_beijing_time, parse_datetime_to_beijing
 
 
 class GitHubStorage:
@@ -123,7 +125,7 @@ class GitHubStorage:
                 
                 # Generate commit message with task count
                 task_count = len(serializable_tasks)
-                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = format_beijing_time(get_beijing_time(), '%Y-%m-%d %H:%M:%S')
                 data = {
                     "message": f"[Auto] Update keepalive tasks ({task_count} active) - {timestamp}",
                     "content": encoded_content,
@@ -202,15 +204,15 @@ class GitHubStorage:
             
             # Convert ISO format strings back to datetime objects
             tasks = {}
-            current_time = datetime.now()
-            
+            current_time = get_beijing_time().replace(tzinfo=None)
+
             for key, task in serializable_tasks.items():
-                start_time = datetime.fromisoformat(task['start_time'])
+                start_time = parse_datetime_to_beijing(task['start_time'], assume_beijing=True)
                 keepalive_hours = task['keepalive_hours']
-                
+
                 # Calculate elapsed time
                 elapsed_hours = (current_time - start_time).total_seconds() / 3600
-                
+
                 # Only restore tasks that haven't expired
                 if elapsed_hours < keepalive_hours:
                     task_dict = {
@@ -221,13 +223,13 @@ class GitHubStorage:
                     }
                     # Restore new fields if present
                     if 'last_used_at' in task:
-                        task_dict['last_used_at'] = datetime.fromisoformat(task['last_used_at']) if isinstance(task['last_used_at'], str) else task['last_used_at']
+                        task_dict['last_used_at'] = parse_datetime_to_beijing(task['last_used_at'], assume_beijing=True) if isinstance(task['last_used_at'], str) else task['last_used_at']
                     if 'next_check_time' in task:
-                        task_dict['next_check_time'] = datetime.fromisoformat(task['next_check_time']) if isinstance(task['next_check_time'], str) else task['next_check_time']
+                        task_dict['next_check_time'] = parse_datetime_to_beijing(task['next_check_time'], assume_beijing=True) if isinstance(task['next_check_time'], str) else task['next_check_time']
                     if 'created_by' in task:
                         task_dict['created_by'] = task['created_by']
                     if 'created_at' in task:
-                        task_dict['created_at'] = datetime.fromisoformat(task['created_at']) if isinstance(task['created_at'], str) else task['created_at']
+                        task_dict['created_at'] = parse_datetime_to_beijing(task['created_at'], assume_beijing=True) if isinstance(task['created_at'], str) else task['created_at']
                     tasks[key] = task_dict
             
             return tasks

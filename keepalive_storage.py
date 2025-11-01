@@ -2,6 +2,7 @@
 Keepalive Tasks Persistent Storage Module
 Supports both local file storage and GitHub-based cloud storage
 Optimized for local-first approach with GitHub sync
+All time handling uses Beijing Timezone (UTC+8)
 """
 import json
 import os
@@ -9,6 +10,7 @@ import threading
 import time
 from datetime import datetime
 from typing import Dict, Optional, Callable
+from timezone_utils import get_beijing_time, format_beijing_time, parse_datetime_to_beijing
 
 
 class KeepaliveStorage:
@@ -114,10 +116,10 @@ class KeepaliveStorage:
 
                 # Convert ISO format strings back to datetime objects
                 tasks = {}
-                current_time = datetime.now()
+                current_time = get_beijing_time().replace(tzinfo=None)
 
                 for key, task in serializable_tasks.items():
-                    start_time = datetime.fromisoformat(task['start_time'])
+                    start_time = parse_datetime_to_beijing(task['start_time'], assume_beijing=True)
                     keepalive_hours = task['keepalive_hours']
 
                     # Only restore tasks that haven't expired
@@ -129,13 +131,13 @@ class KeepaliveStorage:
                             'start_time': start_time,
                             'keepalive_hours': keepalive_hours,
                             'created_by': task.get('created_by', 'unknown'),
-                            'created_at': datetime.fromisoformat(task['created_at']) if 'created_at' in task else start_time
+                            'created_at': parse_datetime_to_beijing(task['created_at'], assume_beijing=True) if 'created_at' in task else start_time
                         }
                         # Restore new fields if present
                         if 'last_used_at' in task:
-                            task_dict['last_used_at'] = datetime.fromisoformat(task['last_used_at']) if isinstance(task['last_used_at'], str) else task['last_used_at']
+                            task_dict['last_used_at'] = parse_datetime_to_beijing(task['last_used_at'], assume_beijing=True) if isinstance(task['last_used_at'], str) else task['last_used_at']
                         if 'next_check_time' in task:
-                            task_dict['next_check_time'] = datetime.fromisoformat(task['next_check_time']) if isinstance(task['next_check_time'], str) else task['next_check_time']
+                            task_dict['next_check_time'] = parse_datetime_to_beijing(task['next_check_time'], assume_beijing=True) if isinstance(task['next_check_time'], str) else task['next_check_time']
                         tasks[key] = task_dict
 
                 return tasks
@@ -375,7 +377,7 @@ class KeepaliveStorage:
             'start_time': start_time,
             'keepalive_hours': keepalive_hours,
             'created_by': created_by or 'unknown',
-            'created_at': datetime.now(),
+            'created_at': get_beijing_time().replace(tzinfo=None),
             'last_used_at': last_used_at,
             'next_check_time': next_check_time
         }
@@ -415,7 +417,7 @@ class KeepaliveStorage:
         # Load from local (no GitHub sync on read)
         tasks = KeepaliveStorage._load_from_local()
         original_count = len(tasks)
-        current_time = datetime.now()
+        current_time = get_beijing_time().replace(tzinfo=None)
 
         # Filter out expired tasks
         active_tasks = {}

@@ -7,9 +7,13 @@ from datetime import datetime, timedelta
 from github_api import GitHubCodespacesManager
 from config import Config
 from keepalive_storage import KeepaliveStorage
+from timezone_utils import get_beijing_time, format_beijing_time, parse_datetime_to_beijing, calculate_elapsed_hours
 import time
 import threading
 from typing import Dict, Optional
+
+# Initialize timezone environment
+Config.initialize_timezone_environment()
 
 
 # Global keepalive service
@@ -91,7 +95,7 @@ class KeepaliveService:
             status = {
                 'running': self._running,
                 'pid': os.getpid(),  # 关键：保存当前进程ID
-                'last_check': datetime.now().isoformat(),
+                'last_check': get_beijing_time().isoformat(),
                 'active_tasks': len(self._task_timers)
             }
 
@@ -102,18 +106,16 @@ class KeepaliveService:
 
     def _log(self, message: str):
         """Print log message with timestamp."""
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = format_beijing_time(get_beijing_time(), '%Y-%m-%d %H:%M:%S')
         print(f"[{timestamp}] {message}")
 
     def _parse_timestamp(self, value: Optional[str]) -> Optional[datetime]:
-        """Parse ISO timestamp from GitHub API to naive datetime."""
+        """Parse ISO timestamp from GitHub API to Beijing timezone datetime."""
         if not value:
             return None
         try:
-            dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
-            if dt.tzinfo:
-                dt = dt.astimezone().replace(tzinfo=None)
-            return dt
+            # 使用新的时区工具解析时间，转换为东八区
+            return parse_datetime_to_beijing(value, assume_beijing=False)
         except Exception:
             self._log(f"⚠️ Failed to parse timestamp: {value}")
             return None
@@ -242,7 +244,7 @@ class KeepaliveService:
         if isinstance(next_check_time, str):
             next_check_time = datetime.fromisoformat(next_check_time)
         
-        current_time = datetime.now()
+        current_time = get_beijing_time().replace(tzinfo=None)
         delay_seconds = (next_check_time - current_time).total_seconds()
         
         # If time has passed, schedule immediately (small delay)
@@ -275,7 +277,7 @@ class KeepaliveService:
             task_key: Task key (account_name_cs_name)
         """
         try:
-            current_time = datetime.now()
+            current_time = get_beijing_time().replace(tzinfo=None)
             self._last_check = current_time
             self._update_service_status()  # 定期更新状态文件
             
@@ -375,7 +377,7 @@ class KeepaliveService:
         # Protection 2: Maximum time in loop
         max_time_minutes = 30
         start_time = self._task_loop_start_times.get(task_key)
-        if start_time and (datetime.now() - start_time).total_seconds() > max_time_minutes * 60:
+        if start_time and (get_beijing_time().replace(tzinfo=None) - start_time).total_seconds() > max_time_minutes * 60:
             self._log(f"    ⚠️ {task_key}: Max loop time ({max_time_minutes}min) reached")
             return True
 
@@ -386,7 +388,7 @@ class KeepaliveService:
         # Initialize loop tracking if needed
         if task_key not in self._task_loop_counts:
             self._task_loop_counts[task_key] = 0
-            self._task_loop_start_times[task_key] = datetime.now()
+            self._task_loop_start_times[task_key] = get_beijing_time().replace(tzinfo=None)
 
         # Increment loop count
         self._task_loop_counts[task_key] += 1
@@ -394,14 +396,14 @@ class KeepaliveService:
         # Log loop progress
         count = self._task_loop_counts[task_key]
         if count % 10 == 0:  # Log every 10 iterations
-            duration = datetime.now() - self._task_loop_start_times[task_key]
+            duration = get_beijing_time().replace(tzinfo=None) - self._task_loop_start_times[task_key]
             self._log(f"    🔄 {task_key}: Loop iteration {count}, duration: {duration.total_seconds():.0f}s")
 
     def _reset_loop_tracking(self, task_key: str):
         """Reset loop tracking when exiting unified logic"""
         if task_key in self._task_loop_counts:
             count = self._task_loop_counts[task_key]
-            duration = datetime.now() - self._task_loop_start_times[task_key]
+            duration = get_beijing_time().replace(tzinfo=None) - self._task_loop_start_times[task_key]
             self._log(f"    ✅ {task_key}: Exited unified logic after {count} iterations, {duration.total_seconds():.0f}s total")
 
             del self._task_loop_counts[task_key]
@@ -478,7 +480,7 @@ class KeepaliveService:
         if cs:
             # Use real codespace data if available
             api_last_used = self._parse_timestamp(cs.get('last_used_at'))
-            last_used_at = api_last_used or datetime.now()
+            last_used_at = api_last_used or get_beijing_time().replace(tzinfo=None)
             next_check_time = last_used_at + timedelta(seconds=buffer_seconds)
 
             KeepaliveStorage.update_task_check_time(
@@ -491,11 +493,11 @@ class KeepaliveService:
             self._log(f"       Next normal check at {next_check_time.strftime('%Y-%m-%d %H:%M:%S')}")
         else:
             # Fallback when cs is None (e.g., loop protection triggered)
-            next_check_time = datetime.now() + timedelta(seconds=buffer_seconds)
+            next_check_time = get_beijing_time().replace(tzinfo=None) + timedelta(seconds=buffer_seconds)
 
             KeepaliveStorage.update_task_check_time(
                 task_key=task_key,
-                last_used_at=datetime.now(),
+                last_used_at=get_beijing_time().replace(tzinfo=None),
                 next_check_time=next_check_time
             )
 
@@ -507,11 +509,11 @@ class KeepaliveService:
     def _schedule_next_check(self, task_key: str, delay_seconds: int):
         """Unified next check scheduling method"""
         try:
-            next_check = datetime.now() + timedelta(seconds=delay_seconds)
+            next_check = get_beijing_time().replace(tzinfo=None) + timedelta(seconds=delay_seconds)
 
             KeepaliveStorage.update_task_check_time(
                 task_key=task_key,
-                last_used_at=datetime.now(),
+                last_used_at=get_beijing_time().replace(tzinfo=None),
                 next_check_time=next_check
             )
 
@@ -886,6 +888,12 @@ def display_sidebar():
             st.caption("• Local file storage")
             st.caption("• Storage status unavailable")
 
+        # Timezone information
+        st.caption("**Timezone:**")
+        st.info(f"🕐 {Config.format_timezone_info()}")
+        st.caption("• All times in Beijing Time")
+        st.caption("• UTC+8 Standard Time")
+
         # Logout button
         st.divider()
         if st.button("🔓 Logout", use_container_width=True):
@@ -945,7 +953,7 @@ def check_and_maintain_keepalive(account_name: str, cs_name: str, manager: GitHu
     keepalive_hours = task['keepalive_hours']
 
     # Calculate elapsed time for display
-    elapsed_hours = (datetime.now() - start_time).total_seconds() / 3600
+    elapsed_hours = calculate_elapsed_hours(start_time, get_beijing_time())
 
     # Check if keepalive period has expired (cleanup expired tasks from session)
     if elapsed_hours >= keepalive_hours:
@@ -1017,7 +1025,7 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
             keepalive_info = ""
             if is_keepalive_active:
                 task = st.session_state.keepalive_tasks[task_key]
-                elapsed = (datetime.now() - task['start_time']).total_seconds() / 3600
+                elapsed = calculate_elapsed_hours(task['start_time'], get_beijing_time())
                 remaining = task['keepalive_hours'] - elapsed
                 keepalive_info = f" 🔄 ({remaining:.1f}h left)"
             
@@ -1106,7 +1114,7 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                             with st.spinner("Starting with keepalive..."):
                                 try:
                                     manager.start_codespace(cs_name)
-                                    start_time = datetime.now()
+                                    start_time = get_beijing_time().replace(tzinfo=None)
                                     
                                     # Get codespace info to get last_used_at
                                     cs = manager.get_codespace(cs_name)
@@ -1115,10 +1123,8 @@ def display_codespaces_for_account(account_name: str, manager: GitHubCodespacesM
                                     # Parse last_used_at or use current time
                                     if last_used_at_str:
                                         try:
-                                            last_used_at = datetime.fromisoformat(last_used_at_str.replace('Z', '+00:00'))
-                                            # Convert to local time if needed
-                                            if last_used_at.tzinfo:
-                                                last_used_at = last_used_at.replace(tzinfo=None)
+                                            # 使用时区工具解析GitHub API时间
+                                            last_used_at = parse_datetime_to_beijing(last_used_at_str, assume_beijing=False)
                                         except:
                                             last_used_at = start_time
                                     else:

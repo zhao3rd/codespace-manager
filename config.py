@@ -1,8 +1,9 @@
 """
-Configuration Module - Multi-Account Support
+Configuration Module - Multi-Account Support with Timezone Configuration
 """
 import os
 import json
+from datetime import timezone, timedelta
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
 
@@ -11,13 +12,17 @@ load_dotenv()
 
 
 class Config:
-    """Configuration settings"""
-    
+    """Configuration settings with timezone support"""
+
     # Default codespace settings
     DEFAULT_MACHINE = "basicLinux32gb"
     DEFAULT_LOCATION = "WestUs2"
     DEFAULT_IDLE_TIMEOUT = 30
     DEFAULT_REF = "main"
+
+    # Timezone settings
+    DEFAULT_TIMEZONE = timezone(timedelta(hours=8))  # 东八区（UTC+8）
+    DEFAULT_TIMEZONE_NAME = "Asia/Shanghai"
 
     # Keepalive settings
     DEFAULT_KEEPALIVE_HOURS = 4.0
@@ -186,4 +191,83 @@ class Config:
         """
         return os.getenv('STREAMLIT_SHARING_MODE') is not None or \
                os.getenv('STREAMLIT_SERVER_HEADLESS') == 'true'
+
+    @staticmethod
+    def get_timezone() -> timezone:
+        """
+        Get configured timezone, default to Beijing Time (UTC+8)
+
+        Returns:
+            Timezone object
+        """
+        # For now, always return Beijing timezone
+        # This can be extended to support configurable timezones in the future
+        return Config.DEFAULT_TIMEZONE
+
+    @staticmethod
+    def get_timezone_name() -> str:
+        """
+        Get timezone name, default to Asia/Shanghai
+
+        Returns:
+            Timezone name string
+        """
+        return Config.DEFAULT_TIMEZONE_NAME
+
+    @staticmethod
+    def get_log_timestamp_format() -> str:
+        """
+        Get standard log timestamp format
+
+        Returns:
+            Timestamp format string
+        """
+        return "%Y-%m-%d %H:%M:%S"
+
+    @staticmethod
+    def get_display_datetime_format() -> str:
+        """
+        Get datetime display format for UI
+
+        Returns:
+            Datetime format string
+        """
+        return "%Y-%m-%d %H:%M:%S"
+
+    @staticmethod
+    def is_timezone_enabled() -> bool:
+        """
+        Check if timezone functionality is enabled
+
+        Returns:
+            True if timezone functionality is enabled
+        """
+        # Always enable timezone functionality
+        return True
+
+    @staticmethod
+    def initialize_timezone_environment() -> None:
+        """
+        Initialize timezone environment settings
+        """
+        # Set timezone environment variable
+        os.environ['TZ'] = Config.get_timezone_name()
+
+        # Try to apply timezone setting (Unix systems)
+        try:
+            import time
+            time.tzset()
+        except (AttributeError, OSError):
+            # Windows or systems without tzset support
+            pass
+
+    @staticmethod
+    def format_timezone_info() -> str:
+        """
+        Get formatted timezone information for display
+
+        Returns:
+            Formatted timezone string
+        """
+        return f"东八区 (UTC+8) - {Config.get_timezone_name()}"
 
